@@ -1,6 +1,6 @@
 import os
 import tempfile
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 
 import arxiv
 import requests
@@ -27,7 +27,7 @@ def _chunk_text(text: str, max_tokens: int = 256, overlap: int = 64) -> List[str
     chunks = []
     step = max_tokens - overlap
     for i in range(0, len(words), step):
-        chunk = " ".join(words[i : i + max_tokens])
+        chunk = " ".join(words[i: i + max_tokens])
         if chunk.strip():
             chunks.append(chunk)
     return chunks
@@ -37,8 +37,8 @@ def _embed_chunks(chunks: List[str]) -> List[List[float]]:
     return embed_texts(chunks)
 
 
-def _download_arxiv_pdf(arxiv_id: str) -> str:
-    """Download arXiv PDF to a temp file and return path."""
+def _download_arxiv_pdf(arxiv_id: str) -> Tuple[str, Any]:
+    """Download arXiv PDF to a temp file and return (path, metadata)."""
     search = arxiv.Search(id_list=[arxiv_id])
     result = next(search.results(), None)
     if result is None:
@@ -67,7 +67,7 @@ def _extract_full_text(pdf_path: str) -> str:
 
 
 def upsert_kb(arxiv_id: str) -> None:
-    """Fetch arXiv paper, chunk it, embed with Vertex, and upsert into Pinecone KB."""
+    """Fetch arXiv paper, chunk it, embed with Vertex, and upsert into Vertex KB."""
     pdf_path, meta = _download_arxiv_pdf(arxiv_id)
     try:
         full_text = _extract_full_text(pdf_path)
@@ -78,6 +78,10 @@ def upsert_kb(arxiv_id: str) -> None:
             pass
 
     chunks = _chunk_text(full_text)
+    if not chunks:
+        # from second file: explicit guard if text extraction fails
+        raise RuntimeError("No text could be extracted from the PDF")
+
     vectors = _embed_chunks(chunks)
 
     # base metadata for all chunks of this paper
@@ -97,7 +101,7 @@ def upsert_kb(arxiv_id: str) -> None:
         to_upsert.append(
             {
                 "id": chunk_id,
-                "vector": vec,       # key name must match vs_upsert
+                "vector": vec,  # key name must match vs_upsert
                 "metadata": metadata,
             }
         )
@@ -145,17 +149,17 @@ def upsert_pdf_file(pdf_path: str, title: str | None = None) -> str:
 
 
 def clear_kb() -> None:
-    """Clearing the Vertex KB index isn't implemented in code.
+    """Placeholder for clearing the KB.
 
-    To fully clear it, drop and recreate the Vertex Vector Search index in the console.
+    Vertex Vector Search streaming indexes don't have a simple 'delete_all' call.
+    To fully clear the KB, drop and recreate the KB index in the console.
     """
     raise NotImplementedError(
-        "clear_kb is not implemented for Vertex Vector Search; drop/recreate the index instead."
+        "clear_kb is not implemented for Vertex Vector Search; drop/recreate the KB index instead."
     )
 
 
-
-def _retrieve(query: str, top_k: int = TOP_K):
+def _retrieve(query: str, top_k: int = TOP_K) -> List[Dict[str, Any]]:
     """Retrieve top_k chunks from Vertex Vector Search KB index."""
     q_vec = embed_texts(query)[0]
     if hasattr(q_vec, "tolist"):
@@ -164,13 +168,12 @@ def _retrieve(query: str, top_k: int = TOP_K):
         emb = list(q_vec)
 
     neighbors = query_kb(emb, top_k=top_k)
-    # already in [{id, score, metadata}] form
+    # neighbors already look like [{id, score, metadata}]
     return neighbors
 
 
-
 def chat(new_message: str, history: List[Dict[str, Any]]):
-    """RAG chat over your KB using Vertex AI + Pinecone.
+    """RAG chat over your KB using Vertex AI + Vertex Vector Search.
 
     history is a list of {"role": "user" | "assistant", "content": str, ...}
     Returns: (assistant_response: str, updated_history: list)
@@ -181,19 +184,18 @@ def chat(new_message: str, history: List[Dict[str, Any]]):
     context_blocks = []
     citation_meta = []
     for i, m in enumerate(matches, start=1):
-        meta = m["metadata"] or {}
+        # from second file: safer access via .get(...)
+        meta = m.get("metadata") or {}
         title = meta.get("title", "")
         text = (meta.get("text") or meta.get("summary") or "")[:1200]
         authors = meta.get("authors", "")
-        context_blocks.append(
-            f"[{i}] {title} — {authors}\n{text}"
-        )
+        context_blocks.append(f"[{i}] {title} — {authors}\n{text}")
         citation_meta.append(
             {
                 "title": title,
                 "authors": authors,
                 "link": meta.get("link", ""),
-                "score": m["score"],
+                "score": m.get("score"),
             }
         )
 
@@ -204,7 +206,7 @@ def chat(new_message: str, history: List[Dict[str, Any]]):
     for msg in history[-6:]:
         role = msg.get("role", "user")
         prefix = "User" if role == "user" else "Assistant"
-        convo_snippets.append(f"{prefix}: {msg.get('content','')}")
+        convo_snippets.append(f"{prefix}: {msg.get('content', '')}")
     convo_text = "\n".join(convo_snippets)
 
     system_prompt = (
