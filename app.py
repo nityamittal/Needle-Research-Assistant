@@ -243,21 +243,21 @@ def apply_needle_theme():
         }
         
         /* Remove Streamlit/BaseWeb focus ring around chat input */
-div[data-testid="stChatInput"] [data-baseweb="textarea"],
-div[data-testid="stChatInput"] [data-baseweb="textarea"]:focus-within,
-div[data-testid="stChatInput"] [data-baseweb="base-input"],
-div[data-testid="stChatInput"] [data-baseweb="base-input"]:focus-within {
-  box-shadow: none !important;
-  outline: none !important;
-  border-color: transparent !important; /* keep your subtle border */
-}
+        div[data-testid="stChatInput"] [data-baseweb="textarea"],
+        div[data-testid="stChatInput"] [data-baseweb="textarea"]:focus-within,
+        div[data-testid="stChatInput"] [data-baseweb="base-input"],
+        div[data-testid="stChatInput"] [data-baseweb="base-input"]:focus-within {
+          box-shadow: none !important;
+          outline: none !important;
+          border-color: transparent !important; /* keep your subtle border */
+        }
 
-/* Also ensure the actual textarea doesn't draw its own outline */
-div[data-testid="stChatInput"] textarea:focus,
-div[data-testid="stChatInput"] textarea:focus-visible {
-  outline: none !important;
-  box-shadow: none !important;
-}
+        /* Also ensure the actual textarea doesn't draw its own outline */
+        div[data-testid="stChatInput"] textarea:focus,
+        div[data-testid="stChatInput"] textarea:focus-visible {
+          outline: none !important;
+          box-shadow: none !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -297,181 +297,206 @@ def render_section_heading(mode_key: str):
     )
 
 
+def _render_citation_tools(similar_df: pd.DataFrame):
+    """Shared UI for citation count + results table."""
+    if similar_df.empty:
+        return
+
+    citation_style_count = len(similar_df)
+    st.markdown(
+        f"**Similar papers found (citation-style count):** {citation_style_count}"
+    )
+
+    st.dataframe(similar_df)
+
+    # Only rows with DOIs are valid for citation lookup
+    dois_only = similar_df[similar_df["DOI"].astype(bool)]
+
+    if dois_only.empty:
+        with st.expander("Get citation count by year for a paper"):
+            st.info("None of the results have DOIs, so citation lookup is not available.")
+        return
+
+    with st.expander("Get citation count by year for a paper"):
+        target_year = st.number_input(
+            "Year",
+            min_value=1900,
+            max_value=2100,
+            value=2020,
+            step=1,
+        )
+
+        doi_options = dois_only["DOI"].tolist()
+        selected_doi = st.selectbox(
+            "Select a DOI from the results",
+            doi_options,
+        )
+
+        use_crossref = st.checkbox(
+            "Use Crossref for publication year (slower, more complete)",
+            value=False,
+        )
+
+        if st.button("Fetch citation count for this DOI and year"):
+            with st.spinner("Looking up citations via OpenCitations..."):
+                try:
+                    count, citing_dois = citation_count_for_year(
+                        selected_doi,
+                        int(target_year),
+                        use_crossref=use_crossref,
+                    )
+                    st.success(f"{count} citations found in {int(target_year)}.")
+
+                    if citing_dois:
+                        st.markdown("**Citing DOIs:**")
+                        for cdoi in citing_dois:
+                            st.write(cdoi)
+                except Exception as e:
+                    st.error(f"Failed to fetch citation data: {e}")
+
+
 def search_papers():
-    with st.form(key='search_form'):
+    with st.form(key="search_form"):
         search_query = st.text_input(
-            "Enter search terms or a prompt to find research papers:")
-        search_button = st.form_submit_button(label='Search')
-        if search_button:
-            with st.spinner('Searching for relevant research papers...'):
-                search_query = prompt_to_query(search_query)
-                embeddings = generate_embeddings(search_query)
-                query_results = query_pinecone(embeddings)
-                query_matches = query_results[0]["matches"]
+            "Enter search terms or a prompt to find research papers:"
+        )
+        search_button = st.form_submit_button(label="Search")
 
-                similar_papers = {"DOI": [], "Title": [], "Date": []}
-                for match in query_matches:
-                    similar_papers["DOI"].append(match["metadata"]["doi"])
-                    similar_papers["Title"].append(match["metadata"]["title"])
-                    similar_papers["Date"].append(
-                        match["metadata"]["latest_creation_date"])
-                    similar_papers = pd.DataFrame(similar_papers)
-                    similar_papers_sorted = similar_papers.sort_values(
-                        by="Date", ascending=False
-                    )
+    if not search_button:
+        return
 
-                    # Simple "citation count" = how many similar papers we found
-                    citation_style_count = len(similar_papers_sorted)
-                    st.markdown(
-                        f"**Similar papers found (citation-style count):** {citation_style_count}"
-                    )
+    if not search_query.strip():
+        st.warning("Please enter a query.")
+        return
 
-                    st.dataframe(similar_papers_sorted)
+    with st.spinner("Searching for relevant research papers..."):
+        # 1) Rewrite prompt into a search query
+        rewritten_query = prompt_to_query(search_query)
 
-                    # Extra: per-year citation count for a selected DOI
-                    with st.expander("Get citation count by year for a paper"):
-                        target_year = st.number_input(
-                            "Year",
-                            min_value=1900,
-                            max_value=2100,
-                            value=2020,
-                            step=1,
-                        )
+        # 2) Embed query and hit vector search
+        embeddings = generate_embeddings(rewritten_query)
+        query_results = query_pinecone(embeddings)
 
-                        doi_options = similar_papers_sorted["DOI"].tolist()
-                        selected_doi = st.selectbox(
-                            "Select a DOI from the results",
-                            doi_options,
-                        )
+        if not query_results or not query_results[0].get("matches"):
+            st.warning("No similar papers found.")
+            return
 
-                        use_crossref = st.checkbox(
-                            "Use Crossref for publication year (slower, more complete)",
-                            value=False,
-                        )
+        query_matches = query_results[0]["matches"]
 
-                        if st.button("Fetch citation count for this DOI and year"):
-                            with st.spinner("Looking up citations via OpenCitations..."):
-                                try:
-                                    count, citing_dois = citation_count_for_year(
-                                        selected_doi,
-                                        int(target_year),
-                                        use_crossref=use_crossref,
-                                    )
-                                    st.success(f"{count} citations found in {int(target_year)}.")
+        # 3) Build rows robustly
+        rows = []
+        for match in query_matches:
+            meta = match.get("metadata") or {}
+            title = meta.get("title")
+            if not title:
+                continue
 
-                                    if citing_dois:
-                                        st.markdown("**Citing DOIs:**")
-                                        for cdoi in citing_dois:
-                                            st.write(cdoi)
-                                except Exception as e:
-                                    st.error(f"Failed to fetch citation data: {e}")
+            row = {
+                "DOI": meta.get("doi") or "",
+                "Title": title,
+                "Date": meta.get("latest_creation_date") or "",
+            }
+            rows.append(row)
 
+        if not rows:
+            st.warning("No usable metadata returned from the index.")
+            return
+
+        similar_papers_df = pd.DataFrame(rows)
+        similar_papers_sorted = similar_papers_df.sort_values(
+            by="Date", ascending=False
+        )
+
+        _render_citation_tools(similar_papers_sorted)
 
 
 def upload_pdf():
-    with st.form(key='upload_form'):
+    with st.form(key="upload_form"):
         uploaded_file = st.file_uploader(
-            "Upload a PDF file of a Research Paper, to find a Similar Research Paper", type=['pdf'])
-        upload_button = st.form_submit_button(label='Upload')
+            "Upload a PDF file of a Research Paper, to find a Similar Research Paper",
+            type=["pdf"],
+        )
+        upload_button = st.form_submit_button(label="Upload")
         upload_add_kb_button = st.form_submit_button(
-            label='Upload & Add to Knowledge Base'
+            label="Upload & Add to Knowledge Base"
         )
 
         action = "search" if upload_button else "add" if upload_add_kb_button else None
 
-        if action and not uploaded_file:
-            st.warning("Please upload a PDF file first.")
+    if not action:
+        return
 
-        if action and uploaded_file:
-            spinner_text = (
-                "Processing and adding to the knowledge base..."
-                if action == "add"
-                else "Processing your PDF..."
-            )
-            with st.spinner(spinner_text):
-                # if PDFs folder does not exist, create it
-                if not os.path.exists("PDFs"):
-                    os.makedirs("PDFs")
+    if not uploaded_file:
+        st.warning("Please upload a PDF file first.")
+        return
 
-                file_path = os.path.join("PDFs", uploaded_file.name)
-                with open(file_path, 'wb') as f:
-                    f.write(uploaded_file.getvalue())
-                data = extract_text(file_path)
-                if len(data) > 5:
-                    embeddings = generate_embeddings(data)
-                    query_results = query_pinecone(embeddings)
-                    query_matches = query_results[0]["matches"]
+    spinner_text = (
+        "Processing and adding to the knowledge base..."
+        if action == "add"
+        else "Processing your PDF..."
+    )
 
-                    similar_papers = {"DOI": [], "Title": [], "Date": []}
-                    for match in query_matches:
-                        similar_papers["DOI"].append(match["metadata"]["doi"])
-                        similar_papers["Title"].append(
-                            match["metadata"]["title"])
-                        similar_papers["Date"].append(
-                            match["metadata"]["latest_creation_date"])
-                        similar_papers = pd.DataFrame(similar_papers)
-                        similar_papers_sorted = similar_papers.sort_values(
-                            by="Date", ascending=False
-                        )
+    with st.spinner(spinner_text):
+        # ensure PDFs folder exists
+        if not os.path.exists("PDFs"):
+            os.makedirs("PDFs")
 
-                        citation_style_count = len(similar_papers_sorted)
-                        st.markdown(
-                            f"**Similar papers found (citation-style count):** {citation_style_count}"
-                        )
+        file_path = os.path.join("PDFs", uploaded_file.name)
+        with open(file_path, "wb") as f:
+            f.write(uploaded_file.getvalue())
 
-                        st.dataframe(similar_papers_sorted)
+        data = extract_text(file_path)
+        if len(data) <= 5:
+            st.warning("Could not extract enough text from the PDF.")
+            return
 
-                        with st.expander("Get citation count by year for a paper"):
-                            target_year = st.number_input(
-                                "Year",
-                                min_value=1900,
-                                max_value=2100,
-                                value=2020,
-                                step=1,
-                            )
+        embeddings = generate_embeddings(data)
+        query_results = query_pinecone(embeddings)
 
-                            doi_options = similar_papers_sorted["DOI"].tolist()
-                            selected_doi = st.selectbox(
-                                "Select a DOI from the results",
-                                doi_options,
-                            )
+        if not query_results or not query_results[0].get("matches"):
+            st.warning("No similar papers found.")
+            return
 
-                            use_crossref = st.checkbox(
-                                "Use Crossref for publication year (slower, more complete)",
-                                value=False,
-                            )
+        query_matches = query_results[0]["matches"]
 
-                            if st.button("Fetch citation count for this DOI and year"):
-                                with st.spinner("Looking up citations via OpenCitations..."):
-                                    try:
-                                        count, citing_dois = citation_count_for_year(
-                                            selected_doi,
-                                            int(target_year),
-                                            use_crossref=use_crossref,
-                                        )
-                                        st.success(f"{count} citations found in {int(target_year)}.")
+        rows = []
+        for match in query_matches:
+            meta = match.get("metadata") or {}
+            title = meta.get("title")
+            if not title:
+                continue
 
-                                        if citing_dois:
-                                            st.markdown("**Citing DOIs:**")
-                                            for cdoi in citing_dois:
-                                                st.write(cdoi)
-                                    except Exception as e:
-                                        st.error(f"Failed to fetch citation data: {e}")
+            row = {
+                "DOI": meta.get("doi") or "",
+                "Title": title,
+                "Date": meta.get("latest_creation_date") or "",
+            }
+            rows.append(row)
 
-                    if action == "add":
-                        try:
-                            doc_id = upsert_pdf_file(
-                                file_path, title=os.path.splitext(uploaded_file.name)[0]
-                            )
-                            toast = getattr(st, "toast", None)
-                            msg = f"Added to knowledge base ({doc_id})."
-                            if callable(toast):
-                                toast(msg)
-                            else:
-                                st.success(msg)
-                        except Exception as e:
-                            st.error(f"Failed to add to knowledge base: {e}")
+        if not rows:
+            st.warning("No usable metadata returned from the index.")
+            return
 
+        similar_papers_df = pd.DataFrame(rows)
+        similar_papers_sorted = similar_papers_df.sort_values(
+            by="Date", ascending=False
+        )
+
+        _render_citation_tools(similar_papers_sorted)
+
+        if action == "add":
+            try:
+                doc_id = upsert_pdf_file(
+                    file_path, title=os.path.splitext(uploaded_file.name)[0]
+                )
+                toast = getattr(st, "toast", None)
+                msg = f"Added to knowledge base ({doc_id})."
+                if callable(toast):
+                    toast(msg)
+                else:
+                    st.success(msg)
+            except Exception as e:
+                st.error(f"Failed to add to knowledge base: {e}")
 
 
 def update_knowledge_base():
@@ -481,12 +506,16 @@ def update_knowledge_base():
     clear_kb_button = st.button("Clear Knowledge Base")
 
     if submit_button:
-        with st.spinner("Adding paper to the knowledge base..."):
-            try:
-                add_paper_to_kb(arxiv_id)
-                st.success("Paper successfully added to the knowledge base!")
-            except Exception as e:
-                st.error(f"Failed to add paper: {str(e)}")
+        cleaned_id = arxiv_id.strip()
+        if not cleaned_id:
+            st.warning("Please enter an arXiv ID.")
+        else:
+            with st.spinner("Adding paper to the knowledge base..."):
+                try:
+                    add_paper_to_kb(cleaned_id)
+                    st.success("Paper successfully added to the knowledge base!")
+                except Exception as e:
+                    st.error(f"Failed to add paper: {str(e)}")
 
     if clear_kb_button:
         with st.spinner("Clearing the knowledge base..."):
