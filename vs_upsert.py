@@ -4,18 +4,25 @@ from typing import List, Dict, Any
 
 from google.cloud import aiplatform_v1
 
-PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
-LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
-INDEX_ID_PAPERS = os.getenv("VS_PAPERS_INDEX_ID")
-INDEX_ID_KB = os.getenv("VS_KB_INDEX_ID")
+OFFLINE_MODE = os.getenv("OFFLINE_MODE", "0") == "1"
 
-if not all([PROJECT_ID, LOCATION, INDEX_ID_PAPERS, INDEX_ID_KB]):
-    raise RuntimeError("VS_* index env vars missing")
+if not OFFLINE_MODE:
+    PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
+    LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+    INDEX_ID_PAPERS = os.getenv("VS_PAPERS_INDEX_ID")
+    INDEX_ID_KB = os.getenv("VS_KB_INDEX_ID")
 
-client = aiplatform_v1.IndexServiceClient()
+    if not all([PROJECT_ID, LOCATION, INDEX_ID_PAPERS, INDEX_ID_KB]):
+        raise RuntimeError("VS_* index env vars missing")
 
-PARENT_PAPERS = f"projects/{PROJECT_ID}/locations/{LOCATION}/indexes/{INDEX_ID_PAPERS}"
-PARENT_KB = f"projects/{PROJECT_ID}/locations/{LOCATION}/indexes/{INDEX_ID_KB}"
+    client = aiplatform_v1.IndexServiceClient()
+
+    PARENT_PAPERS = f"projects/{PROJECT_ID}/locations/{LOCATION}/indexes/{INDEX_ID_PAPERS}"
+    PARENT_KB = f"projects/{PROJECT_ID}/locations/{LOCATION}/indexes/{INDEX_ID_KB}"
+else:
+    client = None
+    PARENT_PAPERS = None
+    PARENT_KB = None
 
 
 def upsert_datapoints(index_parent: str, items: List[Dict[str, Any]]) -> None:
@@ -28,6 +35,9 @@ def upsert_datapoints(index_parent: str, items: List[Dict[str, Any]]) -> None:
         "metadata": <dict>,   # currently ignored at index level
       }
     """
+    if OFFLINE_MODE:
+        return
+
     datapoints: List[aiplatform_v1.IndexDatapoint] = []
 
     for item in items:
@@ -54,8 +64,12 @@ def upsert_datapoints(index_parent: str, items: List[Dict[str, Any]]) -> None:
 
 
 def upsert_papers(items: List[Dict[str, Any]]) -> None:
+    if OFFLINE_MODE:
+        return
     upsert_datapoints(PARENT_PAPERS, items)
 
 
 def upsert_kb(items: List[Dict[str, Any]]) -> None:
+    if OFFLINE_MODE:
+        return
     upsert_datapoints(PARENT_KB, items)

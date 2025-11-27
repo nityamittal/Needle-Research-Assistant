@@ -1,23 +1,46 @@
 import streamlit as st
+
 from chatpdf import chat
 
 
-def llm_chat():
-    st.title("Chat with Research")
+def _render_intro():
+    st.markdown(
+        """
+        <div class="needle-hero-card">
+            <h1>Hello!</h1>
+            <p>You can use Needle to explore or discuss academic research.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
+
+def llm_chat():
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
+    if not st.session_state.messages:
+        _render_intro()
+    else:
+        st.markdown(
+            """
+            <div class="needle-section-title needle-spacer">
+                <h2>Conversation</h2>
+                <p>Continue your discussion or clear the chat to start again.</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
     if st.button("Clear Conversation"):
         st.session_state.messages = []
+        st.experimental_rerun()
 
-    # show history
     for message in st.session_state.messages:
         role = message.get("role", "user")
         content = message.get("content", "")
         with st.chat_message(role):
             st.markdown(content)
-            # show citations for assistant messages, if present
             if role == "assistant" and message.get("citations"):
                 citations = message["citations"]
                 st.caption(f"Citations used: {len(citations)}")
@@ -30,10 +53,8 @@ def llm_chat():
                         line += f"  \n{link}"
                     st.markdown(line)
 
-    # chat input
-    prompt = st.chat_input("Ask a question about your knowledge base...")
+    prompt = st.chat_input("Ask me anything about your knowledge base...")
     if prompt:
-        # show user message immediately
         with st.chat_message("user"):
             st.markdown(prompt)
 
@@ -42,7 +63,6 @@ def llm_chat():
         )
         st.session_state.messages = updated_history
 
-        # render the last assistant message with citations
         last_msg = updated_history[-1]
         with st.chat_message("assistant"):
             st.markdown(assistant_response)
