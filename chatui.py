@@ -16,6 +16,7 @@ def _render_intro():
         unsafe_allow_html=True,
     )
 
+
 def _inject_copy_button_styles():
     st.markdown(
         """
@@ -125,6 +126,7 @@ def _render_citations(citations):
 
 def llm_chat():
     _inject_copy_button_styles()
+    st.title("Chat with Research")
 
     if "messages" not in st.session_state:
         st.session_state.messages = []
@@ -144,8 +146,8 @@ def llm_chat():
 
     if st.button("Clear Conversation"):
         st.session_state.messages = []
-        st.experimental_rerun()
 
+    # show history
     for idx, message in enumerate(st.session_state.messages):
         role = message.get("role", "user")
         content = message.get("content", "")
@@ -155,8 +157,10 @@ def llm_chat():
                 _render_copy_button(content, f"history-{idx}")
                 _render_citations(message.get("citations") or [])
 
-    prompt = st.chat_input("Ask me anything about your knowledge base...")
+    # chat input (placeholder from second file)
+    prompt = st.chat_input("Ask a question about your knowledge base...")
     if prompt:
+        # show user message immediately
         with st.chat_message("user"):
             st.markdown(prompt)
 
