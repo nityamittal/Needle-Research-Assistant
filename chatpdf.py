@@ -8,7 +8,7 @@ from langchain_community.document_loaders import PyMuPDFLoader
 
 from vertex_client import embed_texts, generate_text
 from vertex_vs_client import query_kb
-from vs_upsert import upsert_kb
+from vs_upsert import upsert_kb as vs_upsert_kb
 
 
 # --- Config ---
@@ -102,8 +102,46 @@ def upsert_kb(arxiv_id: str) -> None:
             }
         )
 
-    upsert_kb(to_upsert)
+    vs_upsert_kb(to_upsert)
 
+
+def upsert_pdf_file(pdf_path: str, title: str | None = None) -> str:
+    """Chunk a local PDF file and upsert it into the KB. Returns the document id used."""
+    if not os.path.exists(pdf_path):
+        raise FileNotFoundError(f"PDF not found: {pdf_path}")
+
+    full_text = _extract_full_text(pdf_path)
+    chunks = _chunk_text(full_text)
+    vectors = _embed_chunks(chunks)
+
+    doc_slug = os.path.splitext(os.path.basename(pdf_path))[0]
+    doc_id_prefix = f"upload-{doc_slug}"
+    summary = (chunks[0] if chunks else full_text)[:600]
+
+    base_meta = {
+        "arxiv_id": doc_slug,
+        "title": title or doc_slug,
+        "authors": "",
+        "summary": summary,
+        "link": "",
+        "source": "uploaded_pdf",
+    }
+
+    to_upsert = []
+    for i, (vec, chunk) in enumerate(zip(vectors, chunks)):
+        chunk_id = f"{doc_id_prefix}_{i}"
+        metadata = dict(base_meta)
+        metadata["text"] = chunk
+        to_upsert.append(
+            {
+                "id": chunk_id,
+                "vector": vec,
+                "metadata": metadata,
+            }
+        )
+
+    vs_upsert_kb(to_upsert)
+    return doc_id_prefix
 
 
 def clear_kb() -> None:

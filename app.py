@@ -6,7 +6,7 @@ import os
 import pandas as pd
 import streamlit as st
 
-from chatpdf import upsert_kb as add_paper_to_kb, clear_kb
+from chatpdf import upsert_kb as add_paper_to_kb, clear_kb, upsert_pdf_file
 from chatui import llm_chat
 from citations import citation_count_for_year
 from pdf2pdf import (
@@ -241,6 +241,7 @@ def apply_needle_theme():
         .needle-spacer {
             margin-top: 1.5rem;
         }
+        
         /* Remove Streamlit/BaseWeb focus ring around chat input */
 div[data-testid="stChatInput"] [data-baseweb="textarea"],
 div[data-testid="stChatInput"] [data-baseweb="textarea"]:focus-within,
@@ -372,8 +373,22 @@ def upload_pdf():
         uploaded_file = st.file_uploader(
             "Upload a PDF file of a Research Paper, to find a Similar Research Paper", type=['pdf'])
         upload_button = st.form_submit_button(label='Upload')
-        if upload_button and uploaded_file:
-            with st.spinner('Processing your PDF...'):
+        upload_add_kb_button = st.form_submit_button(
+            label='Upload & Add to Knowledge Base'
+        )
+
+        action = "search" if upload_button else "add" if upload_add_kb_button else None
+
+        if action and not uploaded_file:
+            st.warning("Please upload a PDF file first.")
+
+        if action and uploaded_file:
+            spinner_text = (
+                "Processing and adding to the knowledge base..."
+                if action == "add"
+                else "Processing your PDF..."
+            )
+            with st.spinner(spinner_text):
                 # if PDFs folder does not exist, create it
                 if not os.path.exists("PDFs"):
                     os.makedirs("PDFs")
@@ -381,7 +396,7 @@ def upload_pdf():
                 file_path = os.path.join("PDFs", uploaded_file.name)
                 with open(file_path, 'wb') as f:
                     f.write(uploaded_file.getvalue())
-                data = extract_text("PDFs/" + uploaded_file.name)
+                data = extract_text(file_path)
                 if len(data) > 5:
                     embeddings = generate_embeddings(data)
                     query_results = query_pinecone(embeddings)
@@ -442,6 +457,20 @@ def upload_pdf():
                                                 st.write(cdoi)
                                     except Exception as e:
                                         st.error(f"Failed to fetch citation data: {e}")
+
+                    if action == "add":
+                        try:
+                            doc_id = upsert_pdf_file(
+                                file_path, title=os.path.splitext(uploaded_file.name)[0]
+                            )
+                            toast = getattr(st, "toast", None)
+                            msg = f"Added to knowledge base ({doc_id})."
+                            if callable(toast):
+                                toast(msg)
+                            else:
+                                st.success(msg)
+                        except Exception as e:
+                            st.error(f"Failed to add to knowledge base: {e}")
 
 
 

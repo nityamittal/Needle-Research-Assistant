@@ -1,4 +1,6 @@
+import json
 import streamlit as st
+import streamlit.components.v1 as components
 
 from chatpdf import chat
 
@@ -14,8 +16,116 @@ def _render_intro():
         unsafe_allow_html=True,
     )
 
+def _inject_copy_button_styles():
+    st.markdown(
+        """
+        <style>
+        .needle-copy-row {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            margin: 0.25rem 0 0.1rem;
+        }
+        .needle-copy-btn {
+            width: 26px;
+            height: 26px;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.28);
+            background: rgba(0,0,0,0.10);
+            color: #e0edff;
+            font-size: 0.9rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+        }
+        .needle-copy-btn:hover {
+            background: rgba(47,140,255,0.3);
+        }
+        .needle-copy-btn:disabled {
+            opacity: 0.65;
+            cursor: default;
+        }
+        .needle-copy-btn.copied {
+            background: rgba(56,180,120,0.25);
+            border-color: rgba(56,180,120,0.7);
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_copy_button(content: str, msg_key: str):
+    """Render a small copy-to-clipboard button for an assistant message."""
+    safe_text = json.dumps(content)
+    components.html(
+        f"""
+        <div class="needle-copy-row">
+            <button class="needle-copy-btn" id="copy-{msg_key}" title="Copy response" aria-label="Copy response">⧉</button>
+        </div>
+        <script>
+            (function() {{
+                const btn = document.getElementById("copy-{msg_key}");
+                if (!btn) return;
+                const ICON = "⧉";
+                const COPIED = "Copied!";
+                const ERROR = "Failed";
+                btn.textContent = ICON;
+
+                async function copyText() {{
+                    try {{
+                        if (navigator.clipboard && navigator.clipboard.writeText) {{
+                            await navigator.clipboard.writeText({safe_text});
+                        }} else {{
+                            const ta = document.createElement('textarea');
+                            ta.value = {safe_text};
+                            document.body.appendChild(ta);
+                            ta.select();
+                            document.execCommand('copy');
+                            document.body.removeChild(ta);
+                        }}
+                        btn.classList.add("copied");
+                        btn.textContent = COPIED;
+                    }} catch (err) {{
+                        console.error("Copy failed", err);
+                        btn.classList.remove("copied");
+                        btn.textContent = ERROR;
+                    }}
+                    btn.disabled = true;
+                    setTimeout(() => {{
+                        btn.classList.remove("copied");
+                        btn.textContent = ICON;
+                        btn.disabled = false;
+                    }}, 1400);
+                }}
+
+                btn.addEventListener("click", copyText);
+            }})();
+        </script>
+        """,
+        height=46,
+    )
+
+
+def _render_citations(citations):
+    if not citations:
+        return
+    st.caption(f"Citations used: {len(citations)}")
+    for i, c in enumerate(citations, start=1):
+        title = c.get("title", "")
+        link = c.get("link", "")
+        authors = c.get("authors", "")
+        line = f"[{i}] **{title}** — {authors}"
+        if link:
+            line += f"  \n{link}"
+        st.markdown(line)
+
 
 def llm_chat():
+    _inject_copy_button_styles()
+
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
@@ -36,22 +146,14 @@ def llm_chat():
         st.session_state.messages = []
         st.experimental_rerun()
 
-    for message in st.session_state.messages:
+    for idx, message in enumerate(st.session_state.messages):
         role = message.get("role", "user")
         content = message.get("content", "")
         with st.chat_message(role):
             st.markdown(content)
-            if role == "assistant" and message.get("citations"):
-                citations = message["citations"]
-                st.caption(f"Citations used: {len(citations)}")
-                for i, c in enumerate(citations, start=1):
-                    title = c.get("title", "")
-                    link = c.get("link", "")
-                    authors = c.get("authors", "")
-                    line = f"[{i}] **{title}** — {authors}"
-                    if link:
-                        line += f"  \n{link}"
-                    st.markdown(line)
+            if role == "assistant":
+                _render_copy_button(content, f"history-{idx}")
+                _render_citations(message.get("citations") or [])
 
     prompt = st.chat_input("Ask me anything about your knowledge base...")
     if prompt:
@@ -66,17 +168,9 @@ def llm_chat():
         last_msg = updated_history[-1]
         with st.chat_message("assistant"):
             st.markdown(assistant_response)
+            _render_copy_button(assistant_response, f"live-{len(updated_history)-1}")
             citations = last_msg.get("citations") or []
-            if citations:
-                st.caption(f"Citations used: {len(citations)}")
-                for i, c in enumerate(citations, start=1):
-                    title = c.get("title", "")
-                    link = c.get("link", "")
-                    authors = c.get("authors", "")
-                    line = f"[{i}] **{title}** — {authors}"
-                    if link:
-                        line += f"  \n{link}"
-                    st.markdown(line)
+            _render_citations(citations)
 
 
 if __name__ == "__main__":
