@@ -164,8 +164,11 @@ def llm_chat():
         with st.chat_message("user"):
             st.markdown(prompt)
 
+        # Get filters from session state
+        filters = st.session_state.get("active_filters")
+        
         assistant_response, updated_history = chat(
-            prompt, st.session_state.messages
+            prompt, st.session_state.messages, filters=filters
         )
         st.session_state.messages = updated_history
 

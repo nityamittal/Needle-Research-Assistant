@@ -1,10 +1,11 @@
 import os
-from typing import List, Union
+from typing import List, Union, Optional
 
 from langchain_community.document_loaders import PyMuPDFLoader
 
 from vertex_client import embed_texts, generate_text
 from vertex_vs_client import query_papers
+from filters import FilterConfig
 
 
 def extract_text(file_path: str) -> str:
@@ -25,7 +26,7 @@ def generate_embeddings(text: Union[str, List[str]]):
     return vectors[0]
 
 
-def query_pinecone(embedding, top_k: int = 5):
+def query_pinecone(embedding, top_k: int = 5, filters: Optional[FilterConfig] = None):
     """Now actually queries Vertex Vector Search vs-papers-index."""
     if embedding is None:
         return []
@@ -36,6 +37,10 @@ def query_pinecone(embedding, top_k: int = 5):
         emb = list(embedding)
 
     neighbors = query_papers(emb, top_k=top_k)
+
+    # Apply filters if provided
+    if filters and not filters.is_empty():
+        neighbors = filters.apply_to_results(neighbors)
 
     # app.py expects [{"matches": [...] }]
     return [{"matches": neighbors}]

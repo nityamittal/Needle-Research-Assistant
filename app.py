@@ -9,6 +9,7 @@ import streamlit as st
 from chatpdf import upsert_kb as add_paper_to_kb, clear_kb, upsert_pdf_file
 from chatui import llm_chat
 from citations import citation_count_for_year
+from filters import FilterConfig, COMMON_CATEGORIES
 from pdf2pdf import (
     extract_text,
     generate_embeddings,
@@ -278,6 +279,132 @@ def build_sidebar():
             label_visibility="collapsed",
         )
         st.caption("AI research assistant for rapid discovery.")
+        
+        # Filter configuration in sidebar
+        st.markdown("---")
+        st.subheader("Search Filters")
+        
+        selected_categories = st.multiselect(
+            "arXiv Categories",
+            options=list(COMMON_CATEGORIES.keys()),
+            format_func=lambda k: f"{k}: {COMMON_CATEGORIES[k]}",
+            key="filter_categories",
+            help="Select one or more arXiv categories to filter results"
+        )
+        
+        year_min = st.number_input(
+            "Year (minimum)",
+            min_value=1990,
+            max_value=2100,
+            value=2010,
+            step=1,
+            key="filter_year_min",
+            help="Filter to papers from this year onwards"
+        )
+        
+        year_max = st.number_input(
+            "Year (maximum)",
+            min_value=1990,
+            max_value=2100,
+            value=2025,
+            step=1,
+            key="filter_year_max",
+            help="Filter to papers up to this year"
+        )
+        
+        title_keywords_input = st.text_input(
+            "Title keywords (comma-separated)",
+            key="filter_title_keywords",
+            help="Papers must contain all keywords in title (AND logic)"
+        )
+        
+        author_name = st.text_input(
+            "Author name (substring)",
+            key="filter_author_name",
+            help="Filter by author name (case-insensitive substring match)"
+        )
+        
+        # Create and store FilterConfig in session state
+        title_keywords = [kw.strip() for kw in title_keywords_input.split(",") if kw.strip()]
+        active_filters = FilterConfig(
+            categories=selected_categories,
+            year_min=year_min if year_min > 0 else None,
+            year_max=year_max if year_max > 0 else None,
+            title_keywords=title_keywords,
+            author_name=author_name,
+        )
+        st.session_state.active_filters = active_filters
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if not active_filters.is_empty():
+                st.info(f"Active filters: {len(selected_categories)} categories, years {year_min}–{year_max}")
+        with col2:
+            if st.button("Clear filters", key="clear_filters", use_container_width=True):
+                st.session_state.active_filters = FilterConfig()
+                st.rerun()
+        
+        # Model generation configuration controls. These update runtime defaults
+        # used by the Vertex generation wrapper. The UI writes settings via the
+        # vertex_client.set_gen_options API.
+        st.markdown("---")
+        try:
+            import vertex_client
+
+            current_opts = vertex_client.get_gen_options()
+        except Exception:
+            vertex_client = None
+            current_opts = {}
+
+        with st.expander("Model settings", expanded=False):
+            temp = st.slider(
+                "Temperature",
+                0.0,
+                1.0,
+                value=float(current_opts.get("temperature", 0.0)),
+                step=0.01,
+                key="gen_temperature",
+            )
+            max_tokens = st.number_input(
+                "Max output tokens",
+                min_value=16,
+                max_value=65536,
+                value=int(current_opts.get("max_output_tokens", 256)),
+                step=1,
+                key="gen_max_output_tokens",
+            )
+            top_p = st.slider(
+                "Top-p (nucleus sampling)",
+                0.0,
+                1.0,
+                value=float(current_opts.get("top_p", 1.0)),
+                step=0.01,
+                key="gen_top_p",
+            )
+            top_k = st.number_input(
+                "Top-k",
+                min_value=0,
+                max_value=1000,
+                value=int(current_opts.get("top_k", 0)),
+                step=1,
+                key="gen_top_k",
+            )
+
+            if st.button("Apply model settings", key="apply_gen_opts"):
+                if vertex_client is None:
+                    st.error("Vertex client not available. Settings not applied.")
+                else:
+                    new_opts = {
+                        "temperature": float(temp),
+                        "max_output_tokens": int(max_tokens),
+                        "top_p": float(top_p),
+                        "top_k": int(top_k),
+                    }
+                    try:
+                        vertex_client.set_gen_options(new_opts)
+                        st.success("Model settings updated.")
+                    except Exception as e:
+                        st.error(f"Failed to update model settings: {e}")
 
     return selected
 
@@ -375,7 +502,11 @@ def search_papers():
 
         # 2) Embed query and hit vector search
         embeddings = generate_embeddings(rewritten_query)
-        query_results = query_pinecone(embeddings)
+        
+        # Get filters from session state (set in build_sidebar)
+        filters = st.session_state.get("active_filters")
+        
+        query_results = query_pinecone(embeddings, filters=filters)
 
         if not query_results or not query_results[0].get("matches"):
             st.warning("No similar papers found.")
@@ -395,6 +526,7 @@ def search_papers():
                 "DOI": meta.get("doi") or "",
                 "Title": title,
                 "Date": meta.get("latest_creation_date") or "",
+                "Categories": meta.get("categories") or "",
             }
             rows.append(row)
 
@@ -451,7 +583,11 @@ def upload_pdf():
             return
 
         embeddings = generate_embeddings(data)
-        query_results = query_pinecone(embeddings)
+        
+        # Get filters from session state
+        filters = st.session_state.get("active_filters")
+        
+        query_results = query_pinecone(embeddings, filters=filters)
 
         if not query_results or not query_results[0].get("matches"):
             st.warning("No similar papers found.")
@@ -470,6 +606,7 @@ def upload_pdf():
                 "DOI": meta.get("doi") or "",
                 "Title": title,
                 "Date": meta.get("latest_creation_date") or "",
+                "Categories": meta.get("categories") or "",
             }
             rows.append(row)
 

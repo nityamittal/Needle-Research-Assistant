@@ -1,6 +1,6 @@
 import os
 import tempfile
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 
 import arxiv
 import requests
@@ -9,6 +9,7 @@ from langchain_community.document_loaders import PyMuPDFLoader
 from vertex_client import embed_texts, generate_text
 from vertex_vs_client import query_kb
 from vs_upsert import upsert_kb as vs_upsert_kb
+from filters import FilterConfig
 
 
 # --- Config ---
@@ -159,8 +160,8 @@ def clear_kb() -> None:
     )
 
 
-def _retrieve(query: str, top_k: int = TOP_K) -> List[Dict[str, Any]]:
-    """Retrieve top_k chunks from Vertex Vector Search KB index."""
+def _retrieve(query: str, top_k: int = TOP_K, filters: Optional[FilterConfig] = None) -> List[Dict[str, Any]]:
+    """Retrieve top_k chunks from Vertex Vector Search KB index, optionally filtered."""
     q_vec = embed_texts(query)[0]
     if hasattr(q_vec, "tolist"):
         emb = q_vec.tolist()
@@ -168,18 +169,24 @@ def _retrieve(query: str, top_k: int = TOP_K) -> List[Dict[str, Any]]:
         emb = list(q_vec)
 
     neighbors = query_kb(emb, top_k=top_k)
+    
+    # Apply filters if provided
+    if filters and not filters.is_empty():
+        neighbors = filters.apply_to_results(neighbors)
+    
     # neighbors already look like [{id, score, metadata}]
     return neighbors
 
 
-def chat(new_message: str, history: List[Dict[str, Any]]):
+def chat(new_message: str, history: List[Dict[str, Any]], filters: Optional[FilterConfig] = None):
     """RAG chat over your KB using Vertex AI + Vertex Vector Search.
 
     history is a list of {"role": "user" | "assistant", "content": str, ...}
+    filters: optional FilterConfig to apply post-search filtering
     Returns: (assistant_response: str, updated_history: list)
     """
     # 1. Retrieve context
-    matches = _retrieve(new_message, top_k=TOP_K)
+    matches = _retrieve(new_message, top_k=TOP_K, filters=filters)
 
     context_blocks = []
     citation_meta = []
