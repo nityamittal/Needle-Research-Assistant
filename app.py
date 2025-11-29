@@ -1,5 +1,7 @@
 import os
 import tempfile
+from citations import citation_count_for_year, citation_count_all_years
+
 
 import pandas as pd
 import streamlit as st
@@ -174,7 +176,6 @@ def apply_needle_theme():
             border-radius: 7px;
             border: 1px solid rgba(255,255,255,0.1);
             padding: 0.6rem 0.8rem;
-
             width: 100%;
             max-width: 1100px;
             margin: 0 auto 1rem;
@@ -259,10 +260,66 @@ def apply_needle_theme():
           outline: none !important;
           box-shadow: none !important;
         }
+
+        /* >>> Make all widget labels/text in main content use light text <<< */
+        [data-testid="stAppViewContainer"] label {
+            color: var(--needle-text) !important;
+        }
+        [data-testid="stAppViewContainer"] [data-testid="stExpander"] * {
+            color: var(--needle-text) !important;
+        }
+        [data-testid="stAppViewContainer"] .stCaption,
+        [data-testid="stAppViewContainer"] .stMarkdown,
+        [data-testid="stAppViewContainer"] p,
+        [data-testid="stAppViewContainer"] span {
+            color: var(--needle-text);
+        }
+        
+        /* Make labels / general text in main content light */
+        [data-testid="stAppViewContainer"] label {
+            color: var(--needle-text) !important;
+        }
+        [data-testid="stAppViewContainer"] [data-testid="stExpander"] * {
+            color: var(--needle-text) !important;
+        }
+        [data-testid="stAppViewContainer"] .stCaption,
+        [data-testid="stAppViewContainer"] .stMarkdown,
+        [data-testid="stAppViewContainer"] p,
+        [data-testid="stAppViewContainer"] span {
+            color: var(--needle-text);
+        }
+
+        /* --- FIX: Give dropdowns / inputs a dark background so text stays readable --- */
+
+        /* Number inputs, text-like inputs in main content */
+        [data-testid="stAppViewContainer"] [data-baseweb="input"] input {
+            background-color: var(--needle-panel) !important;
+            color: var(--needle-text) !important;
+        }
+
+        /* Selectbox "closed" control */
+        [data-testid="stAppViewContainer"] [data-baseweb="select"] > div {
+            background-color: var(--needle-panel) !important;
+            color: var(--needle-text) !important;
+            border-color: rgba(255,255,255,0.25) !important;
+        }
+
+        /* Selectbox dropdown menu */
+        [data-testid="stAppViewContainer"] [data-baseweb="menu"] {
+            background-color: var(--needle-panel) !important;
+            color: var(--needle-text) !important;
+        }
+
+        /* Radio / checkbox labels inside main area */
+        [data-testid="stAppViewContainer"] [data-baseweb="radio"] label,
+        [data-testid="stAppViewContainer"] [data-baseweb="checkbox"] label {
+            color: var(--needle-text) !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
     )
+
 
 
 def build_sidebar():
@@ -348,11 +405,102 @@ def _build_results_table(query_matches):
 
     return df_sorted
 
+def _render_citation_tools(df: pd.DataFrame):
+    """UI to look up citation counts for a selected DOI."""
+    if df is None or df.empty:
+        return
+
+    if "DOI" not in df.columns:
+        return
+
+    try:
+        dois_only = df[df["DOI"].astype(bool)]
+    except Exception:
+        return
+
+    if dois_only.empty:
+        with st.expander("Citation tools for these results"):
+            st.info("None of the results have DOIs, so citation lookup is not available.")
+        return
+
+    with st.expander("Citation tools for these results"):
+        # What kind of count do we want?
+        mode = st.radio(
+            "What do you want to count?",
+            ("Citations in a specific year", "All citations (all years combined)"),
+            key="citation_mode",
+        )
+
+        # Year is only used in the first mode, but it's fine to always show it
+        target_year = st.number_input(
+            "Year (for single-year count)",
+            min_value=1900,
+            max_value=2100,
+            value=2020,
+            step=1,
+        )
+
+        doi_options = dois_only["DOI"].tolist()
+        selected_doi = st.selectbox(
+            "Select a DOI from the results",
+            doi_options,
+        )
+
+        use_crossref = st.checkbox(
+            "Use Crossref to refine publication year (slower, more accurate)",
+            value=False,
+        )
+        # <-- this is the explanation line you asked for
+        st.caption(
+            "If checked, Needle will call Crossref for each citing paper to get a more "
+            "accurate publication year before counting citations."
+        )
+
+        if mode.startswith("Citations in a specific year"):
+            # Single-year count
+            if st.button(
+                "Fetch citation count for this DOI and year",
+                key="btn_citations_year",
+            ):
+                with st.spinner("Looking up citations via OpenCitations..."):
+                    try:
+                        count, citing_dois = citation_count_for_year(
+                            selected_doi,
+                            int(target_year),
+                            use_crossref=use_crossref,
+                        )
+                        st.success(f"{count} citations found in {int(target_year)}.")
+
+                        if citing_dois:
+                            st.markdown("**Citing DOIs:**")
+                            for cdoi in citing_dois:
+                                st.write(cdoi)
+                    except Exception as e:
+                        st.error(f"Failed to fetch citation data: {e}")
+        else:
+            # All-years combined
+            if st.button(
+                "Fetch total citation count for this DOI",
+                key="btn_citations_all",
+            ):
+                with st.spinner("Looking up all-time citations via OpenCitations..."):
+                    try:
+                        count, citing_dois = citation_count_all_years(selected_doi)
+                        st.success(f"{count} citations found across all years.")
+
+                        if citing_dois:
+                            st.markdown("**Citing DOIs:**")
+                            for cdoi in citing_dois:
+                                st.write(cdoi)
+                    except Exception as e:
+                        st.error(f"Failed to fetch citation data: {e}")
+
 
 # --- UI Pieces ---
 
 
 def prompt_to_paper_ui():
+    # --- search form ---
     with st.form(key="search_form"):
         user_prompt = st.text_input(
             "Describe what you're looking for (topic, question, idea):",
@@ -360,22 +508,35 @@ def prompt_to_paper_ui():
         )
         submitted = st.form_submit_button("Search")
 
-    if not submitted or not user_prompt.strip():
+    # When the form is submitted, run the search and store the results
+    if submitted:
+        if not user_prompt.strip():
+            st.warning("Please type something before searching.")
+            st.session_state.pop("prompt_results", None)
+        else:
+            with st.spinner("Turning your prompt into a search + querying papers..."):
+                rewritten = prompt_to_query(user_prompt)
+                emb = generate_embeddings(rewritten)
+                query_results = query_pinecone(emb)
+                if not query_results:
+                    st.error("No results from the index.")
+                    st.session_state.pop("prompt_results", None)
+                else:
+                    query_matches = query_results[0].get("matches", [])
+                    df_sorted = _build_results_table(query_matches)
+                    if df_sorted is None:
+                        st.error("No usable metadata returned for this query.")
+                        st.session_state.pop("prompt_results", None)
+                    else:
+                        # store DataFrame in session so it survives button clicks
+                        st.session_state["prompt_results"] = df_sorted
+
+    # --- always render the last results if we have them ---
+    df_sorted = st.session_state.get("prompt_results")
+
+    if df_sorted is None or df_sorted.empty:
+        # nothing to show yet
         return
-
-    with st.spinner("Turning your prompt into a search + querying papers..."):
-        rewritten = prompt_to_query(user_prompt)
-        emb = generate_embeddings(rewritten)
-        query_results = query_pinecone(emb)
-        if not query_results:
-            st.error("No results from the index.")
-            return
-
-        query_matches = query_results[0].get("matches", [])
-        df_sorted = _build_results_table(query_matches)
-        if df_sorted is None:
-            st.error("No usable metadata returned for this query.")
-            return
 
     citation_style_count = len(df_sorted)
     st.markdown(
@@ -393,61 +554,71 @@ def prompt_to_paper_ui():
         },
     )
 
+    # citation UI under the table
+    _render_citation_tools(df_sorted)
 
 def pdf_to_paper_ui():
     uploaded_file = st.file_uploader(
         "Upload a PDF to find similar arXiv papers:",
         type=["pdf"],
     )
-    if not uploaded_file:
-        return
 
     if st.button("Find similar papers"):
-        with st.spinner("Reading your PDF and querying the index..."):
-            # Save to a temp file so PyMuPDF can read it
-            fd, tmp_path = tempfile.mkstemp(suffix=".pdf")
-            with os.fdopen(fd, "wb") as f:
-                f.write(uploaded_file.read())
+        if not uploaded_file:
+            st.error("Upload a PDF first.")
+        else:
+            with st.spinner("Reading your PDF and querying the index..."):
+                # Save to a temp file so PyMuPDF can read it
+                fd, tmp_path = tempfile.mkstemp(suffix=".pdf")
+                with os.fdopen(fd, "wb") as f:
+                    f.write(uploaded_file.read())
 
-            try:
-                text = extract_text(tmp_path)
-            finally:
                 try:
-                    os.remove(tmp_path)
-                except OSError:
-                    pass
+                    text = extract_text(tmp_path)
+                finally:
+                    try:
+                        os.remove(tmp_path)
+                    except OSError:
+                        pass
 
-            if len(text.split()) <= 5:
-                st.error("Couldn't extract enough text from that PDF.")
-                return
+                if len(text.split()) <= 5:
+                    st.error("Couldn't extract enough text from that PDF.")
+                    st.session_state.pop("pdf_results", None)
+                else:
+                    emb = generate_embeddings(text)
+                    query_results = query_pinecone(emb)
+                    if not query_results:
+                        st.error("No results from the index.")
+                        st.session_state.pop("pdf_results", None)
+                    else:
+                        query_matches = query_results[0].get("matches", [])
+                        df_sorted = _build_results_table(query_matches)
+                        if df_sorted is None:
+                            st.error("No usable metadata returned for this PDF.")
+                            st.session_state.pop("pdf_results", None)
+                        else:
+                            st.session_state["pdf_results"] = df_sorted
 
-            emb = generate_embeddings(text)
-            query_results = query_pinecone(emb)
-            if not query_results:
-                st.error("No results from the index.")
-                return
+    # render last PDF results if available
+    df_sorted = st.session_state.get("pdf_results")
+    if df_sorted is None or df_sorted.empty:
+        return
 
-            query_matches = query_results[0].get("matches", [])
-            df_sorted = _build_results_table(query_matches)
-            if df_sorted is None:
-                st.error("No usable metadata returned for this PDF.")
-                return
+    citation_style_count = len(df_sorted)
+    st.markdown(f"**Similar papers found:** {citation_style_count}")
+    st.data_editor(
+        df_sorted,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Link": st.column_config.LinkColumn(
+                "PDF",
+                display_text="Open PDF",
+            ),
+        },
+    )
 
-        citation_style_count = len(df_sorted)
-        st.markdown(
-            f"**Similar papers found:** {citation_style_count}"
-        )
-        st.data_editor(
-            df_sorted,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Link": st.column_config.LinkColumn(
-                    "PDF",
-                    display_text="Open PDF",
-                ),
-            },
-        )
+    _render_citation_tools(df_sorted)
 
 
 def update_kb_ui():
