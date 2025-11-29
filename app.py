@@ -1,6 +1,9 @@
 import os
 import tempfile
+
 from citations import citation_count_for_year, citation_count_all_years
+from pdf_references import extract_references_from_pdf, annotate_results
+
 
 
 import pandas as pd
@@ -23,31 +26,31 @@ st.set_page_config(
 # -------------------------------------------------------------------
 
 NAV_ITEMS = [
-    {"key": "prompt", "label": "Prompt → Paper", "icon": "🔎"},
-    {"key": "pdf", "label": "PDF → Paper", "icon": "📄"},
-    {"key": "chat", "label": "Chat with Research", "icon": "💬"},
-    {"key": "kb", "label": "Update Knowledge Base", "icon": "🗄️"},
+    {"key": "prompt", "label": "Discover Papers using Prompts",     "icon": "🔍"},
+    {"key": "pdf",    "label": "Discover Papers using a PDF",       "icon": "📄"},
+    {"key": "chat",   "label": "Ask Your Library",    "icon": "💬"},
+    {"key": "kb",     "label": "Manage Library",      "icon": "📚"},
 ]
+
 
 SECTION_COPY = {
     "prompt": {
-        "title": "Prompt → Paper",
-        "subtitle": "Describe what you want; Needle will turn it into a paper search.",
+        "title": "Discover Papers using Prompts",
+        "subtitle": "Search arXiv with natural language: Describe what you want and Needle will turn it into a paper search!",
     },
     "pdf": {
-        "title": "PDF → Similar Papers",
-        "subtitle": "Upload a PDF and instantly find related arXiv papers.",
+        "title": "Discover Papers using a PDF",
+        "subtitle": "Upload a PDF and instantly find related arXiv papers!",
     },
     "chat": {
-        "title": "Chat with Research KB",
-        "subtitle": "Ask questions grounded in the papers in your knowledge base.",
+        "title": "Ask Your Library",
+        "subtitle": "Ask questions grounded in the papers in your knowledge base!",
     },
     "kb": {
-        "title": "Update Knowledge Base",
-        "subtitle": "Add arXiv papers or local PDFs into your research KB.",
+        "title": "Manage Library",
+        "subtitle": "Add arXiv papers or local PDFs into your research knowledge base!",
     },
 }
-
 
 def apply_needle_theme():
     st.markdown(
@@ -62,10 +65,26 @@ def apply_needle_theme():
             --needle-text: #fefefe;
             --needle-muted: #c5d4e4;
         }
+
+        /* Global typography */
+        html, body, [data-testid="stAppViewContainer"] {
+            font-family: system-ui, -apple-system, BlinkMacSystemFont,
+                         "Segoe UI", Roboto, sans-serif;
+            font-size: 15px;
+        }
+
+        /* Center main block and limit width so content doesn't sprawl */
+        [data-testid="stAppViewContainer"] .block-container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding-top: 2.5rem;
+        }
+
         [data-testid="stAppViewContainer"] {
             background-color: var(--needle-bg);
             color: var(--needle-text);
         }
+
         header[data-testid="stHeader"], .stAppToolbar {
             background-color: var(--needle-bg);
             border-bottom: 1px solid rgba(255,255,255,0.08);
@@ -74,6 +93,8 @@ def apply_needle_theme():
             background-color: var(--needle-bg) !important;
             color: var(--needle-text) !important;
         }
+
+        /* Sidebar styling */
         [data-testid="stSidebar"] {
             background-color: var(--needle-sidebar);
             color: var(--needle-text);
@@ -86,9 +107,10 @@ def apply_needle_theme():
             padding-top: 2rem;
         }
         .needle-logo {
-            font-size: 1.8rem;
-            font-weight: 600;
-            margin-bottom: 1rem;
+            font-size: 1.9rem;
+            font-weight: 640;
+            margin-bottom: 1.2rem;
+            letter-spacing: 0.04em;
         }
         [data-testid="stSidebar"] div[role="radiogroup"] {
             gap: 0.4rem;
@@ -103,6 +125,7 @@ def apply_needle_theme():
             display: flex;
             align-items: center;
             gap: 0.45rem;
+            font-size: 0.92rem;
         }
         [data-testid="stSidebar"] div[role="radiogroup"] label:hover {
             background: rgba(255,255,255,0.10);
@@ -111,34 +134,48 @@ def apply_needle_theme():
             background: rgba(47,140,255,0.20);
             border: 1px solid rgba(47,140,255,0.55);
         }
+
+        /* Section headings: center container, keep text left for readability */
         .needle-section-title {
             text-align: left;
             margin-bottom: 1.5rem;
+            max-width: 850px;
+            margin-left: auto;
+            margin-right: auto;
         }
         .needle-section-title h2 {
             color: var(--needle-text);
-            margin-bottom: 0.3rem;
-            font-size: 2rem;
+            margin-bottom: 0.25rem;
+            font-size: 2.1rem;
+            font-weight: 640;
+            letter-spacing: 0.02em;
         }
         .needle-section-title p {
             color: var(--needle-muted);
             margin: 0;
+            font-size: 0.95rem;
         }
+
+        /* Hero card (chat intro etc.) */
         .needle-hero-card {
             text-align: center;
-            padding: 2rem;
-            margin-bottom: 1.5rem;
+            padding: 2.2rem 2rem;
+            margin: 0 auto 1.6rem;
+            max-width: 900px;
         }
         .needle-hero-card h1 {
             font-size: 3rem;
             color: #2196f3;
-            margin-bottom: 0.4rem;
+            margin-bottom: 0.45rem;
+            font-weight: 700;
         }
         .needle-hero-card p {
             color: var(--needle-muted);
             margin: 0;
             font-size: 1rem;
         }
+
+        /* Forms / cards */
         .stForm, form[data-testid="stForm"] {
             background: rgba(255,255,255,0.03);
             padding: 1.5rem 1.2rem;
@@ -151,11 +188,24 @@ def apply_needle_theme():
             border: 1px solid rgba(255,255,255,0.15);
             border-radius: 7px;
         }
+
+        /* File uploader button + dropzone */
         .stFileUploader>div>div>button {
             background: transparent;
             color: var(--needle-text);
             border: 1px dashed rgba(255,255,255,0.4);
         }
+        [data-testid="stFileUploaderDropzone"] {
+            background-color: var(--needle-panel) !important;
+            border: 1px dashed rgba(255,255,255,0.4) !important;
+        }
+        /* Dark text in dropzone for contrast if/when Streamlit forces light bg */
+        [data-testid="stFileUploaderDropzone"] *,
+        [data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] * {
+            color: #111 !important;
+        }
+
+        /* Buttons */
         .stButton>button, button[kind="secondary"] {
             background: var(--needle-accent);
             color: #fff;
@@ -163,6 +213,7 @@ def apply_needle_theme():
             border-radius: 999px;
             padding: 0.45rem 1.6rem;
             font-weight: 600;
+            font-size: 0.95rem;
         }
         .stButton>button:hover,
         .stButton>button:focus-visible,
@@ -171,6 +222,8 @@ def apply_needle_theme():
             background: #1f71e7;
             color: #fff !important;
         }
+
+        /* Chat input */
         div[data-testid="stChatInput"] {
             background: var(--needle-panel);
             border-radius: 7px;
@@ -261,21 +314,7 @@ def apply_needle_theme():
           box-shadow: none !important;
         }
 
-        /* >>> Make all widget labels/text in main content use light text <<< */
-        [data-testid="stAppViewContainer"] label {
-            color: var(--needle-text) !important;
-        }
-        [data-testid="stAppViewContainer"] [data-testid="stExpander"] * {
-            color: var(--needle-text) !important;
-        }
-        [data-testid="stAppViewContainer"] .stCaption,
-        [data-testid="stAppViewContainer"] .stMarkdown,
-        [data-testid="stAppViewContainer"] p,
-        [data-testid="stAppViewContainer"] span {
-            color: var(--needle-text);
-        }
-        
-        /* Make labels / general text in main content light */
+        /* Main labels / text in content area */
         [data-testid="stAppViewContainer"] label {
             color: var(--needle-text) !important;
         }
@@ -289,32 +328,30 @@ def apply_needle_theme():
             color: var(--needle-text);
         }
 
-        /* --- FIX: Give dropdowns / inputs a dark background so text stays readable --- */
-
-        /* Number inputs, text-like inputs in main content */
+        /* Inputs / dropdowns dark background for contrast */
         [data-testid="stAppViewContainer"] [data-baseweb="input"] input {
             background-color: var(--needle-panel) !important;
             color: var(--needle-text) !important;
         }
-
-        /* Selectbox "closed" control */
         [data-testid="stAppViewContainer"] [data-baseweb="select"] > div {
             background-color: var(--needle-panel) !important;
             color: var(--needle-text) !important;
             border-color: rgba(255,255,255,0.25) !important;
         }
-
-        /* Selectbox dropdown menu */
         [data-testid="stAppViewContainer"] [data-baseweb="menu"] {
             background-color: var(--needle-panel) !important;
             color: var(--needle-text) !important;
         }
-
-        /* Radio / checkbox labels inside main area */
         [data-testid="stAppViewContainer"] [data-baseweb="radio"] label,
         [data-testid="stAppViewContainer"] [data-baseweb="checkbox"] label {
             color: var(--needle-text) !important;
         }
+        /* Make file uploader dropzone text light to contrast with dark background */
+        [data-testid="stFileUploaderDropzone"] *,
+        [data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] * {
+            color: var(--needle-text) !important;  /* or just #fefefe */
+        }
+
         </style>
         """,
         unsafe_allow_html=True,
@@ -404,6 +441,59 @@ def _build_results_table(query_matches):
         df_sorted = df.sort_values(by="Score", ascending=True)
 
     return df_sorted
+
+def _build_results_table_with_citations(query_matches):
+    """Like _build_results_table, but also adds a 'Cited in PDF' column."""
+    table = {
+        "Title": [],
+        "Authors": [],
+        "Abstract": [],
+        "Link": [],
+        "Date": [],
+        "Score": [],
+        "DOI": [],
+        "Cited in PDF": [],
+    }
+
+    for match in query_matches:
+        meta = match.get("metadata") or {}
+
+        title = meta.get("title") or f"arXiv {match.get('id', '')}"
+        authors = meta.get("authors") or ""
+        abstract = meta.get("abstract") or ""
+        date = meta.get("latest_creation_date") or ""
+        doi = meta.get("doi") or ""
+
+        arxiv_id = meta.get("arxiv_id") or match.get("id") or ""
+        pdf_url = meta.get("pdf_url")
+        if not pdf_url and arxiv_id:
+            pdf_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+
+        # cited flag from annotate_results; default False
+        linked = bool(match.get("linked_in_pdf", False))
+
+        table["Title"].append(title)
+        table["Authors"].append(authors)
+        table["Abstract"].append(abstract)
+        table["Date"].append(date)
+        table["DOI"].append(doi)
+        table["Link"].append(pdf_url or "")
+        table["Score"].append(match.get("score"))
+        table["Cited in PDF"].append("✅" if linked else "❌")
+
+    if not table["Title"]:
+        return None
+
+    df = pd.DataFrame(table)
+    # keep the same sort behavior as your original function
+    if "Date" in df.columns and df["Date"].notna().any():
+        df_sorted = df.sort_values(by="Date", ascending=False)
+    else:
+        df_sorted = df.sort_values(by("Score"), ascending=True)
+
+    return df_sorted
+
+
 
 def _render_citation_tools(df: pd.DataFrame):
     """UI to look up citation counts for a selected DOI."""
@@ -566,59 +656,70 @@ def pdf_to_paper_ui():
     if st.button("Find similar papers"):
         if not uploaded_file:
             st.error("Upload a PDF first.")
+            # nothing stored, bail
+            st.session_state.pop("pdf_results", None)
         else:
             with st.spinner("Reading your PDF and querying the index..."):
-                # Save to a temp file so PyMuPDF can read it
                 fd, tmp_path = tempfile.mkstemp(suffix=".pdf")
-                with os.fdopen(fd, "wb") as f:
-                    f.write(uploaded_file.read())
-
                 try:
+                    # write uploaded PDF to temp
+                    with os.fdopen(fd, "wb") as f:
+                        f.write(uploaded_file.read())
+
+                    # 1) extract text
                     text = extract_text(tmp_path)
+                    if not text or len(text.split()) <= 5:
+                        st.error("Couldn't extract enough text from that PDF.")
+                        st.session_state.pop("pdf_results", None)
+                        return
+
+                    # 2) try to extract references (safe fail)
+                    try:
+                        references = extract_references_from_pdf(tmp_path)
+                    except Exception as e:
+                        print(f"[WARN] failed to extract references from PDF: {e}")
+                        references = None
+
                 finally:
                     try:
                         os.remove(tmp_path)
                     except OSError:
                         pass
 
-                if len(text.split()) <= 5:
-                    st.error("Couldn't extract enough text from that PDF.")
+            # 3) embed + query Pinecone
+            emb = generate_embeddings(text)
+            query_results = query_pinecone(emb)
+            if not query_results:
+                st.error("No results from the index.")
+                st.session_state.pop("pdf_results", None)
+            else:
+                query_matches = query_results[0].get("matches", []) or []
+
+                # 4) annotate with linked_in_pdf flag if we have refs
+                if references:
+                    query_matches = annotate_results(query_matches, references)
+
+                # 5) build table WITH citations column
+                df_sorted = _build_results_table_with_citations(query_matches)
+                if df_sorted is None:
+                    st.error("No usable metadata returned for this PDF.")
                     st.session_state.pop("pdf_results", None)
                 else:
-                    emb = generate_embeddings(text)
-                    query_results = query_pinecone(emb)
-                    if not query_results:
-                        st.error("No results from the index.")
-                        st.session_state.pop("pdf_results", None)
-                    else:
-                        query_matches = query_results[0].get("matches", [])
-                        df_sorted = _build_results_table(query_matches)
-                        if df_sorted is None:
-                            st.error("No usable metadata returned for this PDF.")
-                            st.session_state.pop("pdf_results", None)
-                        else:
-                            st.session_state["pdf_results"] = df_sorted
+                    st.session_state["pdf_results"] = df_sorted
 
-    # render last PDF results if available
+    # ---- render last PDF results (no UnboundLocalError) ----
     df_sorted = st.session_state.get("pdf_results")
-    if df_sorted is None or df_sorted.empty:
-        return
+    if df_sorted is not None:
+        st.data_editor(
+            df_sorted,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Link": st.column_config.LinkColumn("PDF"),
+            },
+        )
+        _render_citation_tools(df_sorted)
 
-    citation_style_count = len(df_sorted)
-    st.markdown(f"**Similar papers found:** {citation_style_count}")
-    st.data_editor(
-        df_sorted,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Link": st.column_config.LinkColumn(
-                "PDF",
-                display_text="Open PDF",
-            ),
-        },
-    )
-
-    _render_citation_tools(df_sorted)
 
 
 def update_kb_ui():
