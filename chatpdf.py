@@ -159,11 +159,21 @@ def upsert_pdf_file(pdf_path: str, title: str | None = None) -> str:
     return doc_id_prefix
 
 
-def clear_kb() -> None:
-    """Not implemented: to fully clear KB, drop/recreate Vertex index + Firestore docs."""
-    raise NotImplementedError(
-        "clear_kb is not implemented; drop/recreate the KB index and delete kb_chunks in Firestore."
-    )
+from metadata_store import upsert_kb_chunks_metadata, clear_kb_chunks
+# (upsert_kb_chunks_metadata is already imported; just add clear_kb_chunks)
+
+def clear_kb() -> int:
+    """
+    Clear the KB metadata from Firestore.
+
+    NOTE: This does NOT remove datapoints from the Vertex index.
+    After this, query_kb will still return neighbors, but metadata/text
+    will be empty so RAG context is effectively gone.
+    """
+    deleted = clear_kb_chunks()
+    print(f"[clear_kb] Deleted {deleted} kb_chunks docs from Firestore.")
+    return deleted
+
 
 
 def _retrieve(query: str, top_k: int = TOP_K) -> List[Dict[str, Any]]:
