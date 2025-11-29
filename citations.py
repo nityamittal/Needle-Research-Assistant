@@ -42,21 +42,38 @@ def _fetch_opencitations_citations(
 
     id must be 'doi:<DOI>'.
     """
+    import requests
+
+def _fetch_opencitations_citations(doi: str, oc_token: Optional[str] = None):
     id_param = f"doi:{doi}"
     url = f"{OPENCITATIONS_BASE}/citations/{id_param}"
 
-    headers = {}
+    headers = {
+        # be a good citizen, add a UA with contact
+        "User-Agent": f"needle-research-assistant (mailto:{os.getenv('CROSSREF_MAILTO', 'noreply@example.com')})"
+    }
     if oc_token:
-        headers["authorization"] = oc_token
+        # OpenCitations expects this header name
+        headers["access-token"] = oc_token
 
-    resp = requests.get(url, headers=headers, timeout=30)
-    resp.raise_for_status()
+    try:
+        resp = requests.get(url, headers=headers, timeout=30)
+        if resp.status_code == 403:
+            # Graceful degrade – no citations instead of exploding
+            return []
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        # Log if you want, but don't kill the app
+        print(f"[WARN] OpenCitations request failed: {e}")
+        return []
+
     data = resp.json()
-
     if not isinstance(data, list):
-        raise ValueError(f"Unexpected OpenCitations response: {data!r}")
+        print(f"[WARN] Unexpected OpenCitations response: {data!r}")
+        return []
 
     return data
+
 
 
 def _get_citation_year_from_opencitations(row: dict) -> Optional[int]:
