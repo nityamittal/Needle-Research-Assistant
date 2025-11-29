@@ -173,3 +173,29 @@ def citation_count_for_year(
             matches.append(citing_doi)
 
     return len(matches), matches
+
+def citation_count_all_years(
+    doi: str,
+    oc_token: Optional[str] = None,
+) -> Tuple[int, List[str]]:
+    """
+    Return (count, list_of_citing_dois) for *all* citations to <doi> across all years.
+
+    - doi: target DOI (without 'doi:' prefix)
+    - oc_token: optional OpenCitations token; if omitted, we use OPENCITATIONS_TOKEN env var.
+    """
+    if oc_token is None:
+        oc_token = os.getenv("OPENCITATIONS_TOKEN")
+
+    rows = _fetch_opencitations_citations(doi, oc_token=oc_token)
+    matches: List[str] = []
+
+    for row in rows:
+        citing_doi = _extract_doi_from_citing_field(row.get("citing", ""))
+        if citing_doi:
+            matches.append(citing_doi)
+
+    # Deduplicate while preserving order
+    unique = list(dict.fromkeys(matches))
+    return len(unique), unique
+
