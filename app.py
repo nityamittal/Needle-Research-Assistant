@@ -11,7 +11,9 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from pdf2pdf import extract_text, generate_embeddings, query_pinecone, prompt_to_query
-from chatpdf import upsert_kb, upsert_pdf_file, chat as kb_chat
+from chatpdf import upsert_kb, upsert_pdf_file, chat as kb_chat, clear_kb
+from metadata_store import get_kb_description, set_kb_description, list_kb_documents, delete_kb_document
+
 
 load_dotenv()
 
@@ -723,6 +725,23 @@ def pdf_to_paper_ui():
 
 
 def update_kb_ui():
+    # --- KB description / overview ---
+    st.subheader("Knowledge Base Overview")
+
+    current_desc = get_kb_description()
+    new_desc = st.text_area(
+        "Description of your KB (optional):",
+        value=current_desc,
+        placeholder="e.g. 'My PhD reading list on ML for physics + privacy papers'",
+        height=80,
+    )
+    if st.button("Save KB description"):
+        set_kb_description(new_desc)
+        st.success("KB description updated.")
+
+    st.markdown("---")
+
+    # --- Add to KB: arXiv ---
     st.subheader("Add by arXiv ID")
     arxiv_id = st.text_input(
         "arXiv ID (e.g. 1412.6980):",
@@ -741,6 +760,7 @@ def update_kb_ui():
 
     st.markdown("---")
 
+    # --- Add to KB: local PDF ---
     st.subheader("Add by uploading a local PDF")
     uploaded_pdf = st.file_uploader(
         "Upload a PDF to add to KB:",
@@ -760,9 +780,14 @@ def update_kb_ui():
                 f.write(uploaded_pdf.read())
 
             try:
+                # Prefer user-supplied title; fall back to original filename
+                fallback_title = os.path.splitext(uploaded_pdf.name)[0]
+                effective_title = (custom_title or fallback_title).strip()
+
                 with st.spinner("Indexing uploaded PDF into KB..."):
-                    doc_id_prefix = upsert_pdf_file(tmp_path, title=custom_title or None)
-                st.success(f"Uploaded PDF added to KB with id prefix: {doc_id_prefix}")
+                    doc_id_prefix = upsert_pdf_file(tmp_path, title=effective_title)
+
+                st.success(f"Uploaded PDF added to KB: {effective_title}")
             except Exception as e:
                 st.error(f"Failed to index uploaded PDF: {e}")
             finally:
@@ -771,8 +796,74 @@ def update_kb_ui():
                 except OSError:
                     pass
 
+    st.markdown("---")
+
+    # --- Browse KB ---
+    st.subheader("Browse Knowledge Base")
+
+    kb_docs = list_kb_documents(limit=200)
+    if not kb_docs:
+        st.info("Your KB is currently empty.")
+    else:
+
+        df = pd.DataFrame(kb_docs)
+        st.data_editor(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "doc_id": "KB ID",
+                "title": "Title",
+                "source": "Source",
+                "arxiv_id": "arXiv ID",
+                "chunk_count": "Chunks",
+            },
+            disabled=True,
+        )
+
+        # simple select+delete UI
+        label_to_id = {
+            f"{row['title']} [{row['source']}] ({row['doc_id']})": row["doc_id"]
+            for row in kb_docs
+        }
+
+        selected_label = st.selectbox(
+            "Remove a specific document from the KB:",
+            options=["(none)"] + list(label_to_id.keys()),
+        )
+
+        if selected_label != "(none)":
+            doc_id_prefix = label_to_id[selected_label]
+            if st.button("Delete selected document from KB"):
+                with st.spinner(f"Deleting {selected_label} ..."):
+                    deleted = delete_kb_document(doc_id_prefix)
+                st.success(f"Deleted {deleted} chunks for {selected_label}.")
+                st.experimental_rerun()
+
+
+    st.markdown("---")
+
+    # --- Danger zone: clear KB ---
+    st.subheader("Danger zone")
+
+    st.warning(
+        "Clearing the KB will remove all stored chunks from Firestore. "
+        "Chat with KB will no longer have any context. "
+        "This does NOT currently delete datapoints from the Vertex index."
+    )
+
+    if st.button("Clear entire KB"):
+        with st.spinner("Clearing KB..."):
+            try:
+                deleted = clear_kb()
+                st.success(f"Cleared KB ({deleted} chunks removed).")
+            except Exception as e:
+                st.error(f"Failed to clear KB: {e}")
+
+
 
 def chat_with_research_ui():
+    desc = get_kb_description()
     if "chat_history" not in st.session_state:
         st.session_state["chat_history"] = []
 
