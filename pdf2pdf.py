@@ -6,6 +6,8 @@ from langchain_community.document_loaders import PyMuPDFLoader
 from vertex_client import embed_texts, generate_text
 from vertex_vs_client import query_papers
 
+TOP_K = int(os.getenv("PAPERS_TOP_K", "10"))
+
 
 def extract_text(file_path: str) -> str:
     """Extract text from the uploaded PDF. Simple version: full text, trimmed."""
@@ -21,11 +23,12 @@ def extract_text(file_path: str) -> str:
 
 
 def generate_embeddings(text: Union[str, List[str]]):
+    """Return a single embedding vector for a string (as list[float])."""
     vectors = embed_texts(text)
     return vectors[0]
 
 
-def query_pinecone(embedding, top_k: int = 5):
+def query_pinecone(embedding, top_k: int = TOP_K):
     """Now actually queries Vertex Vector Search vs-papers-index."""
     if embedding is None:
         return []
@@ -41,8 +44,8 @@ def query_pinecone(embedding, top_k: int = 5):
     return [{"matches": neighbors}]
 
 
-
 def prompt_to_query(user_prompt: str) -> str:
+    """Use Gemini (Vertex AI) to rewrite a natural-language prompt into a search query."""
     system_prompt = (
         "You are a research assistant helping to search for academic papers. "
         "Given a user's question, rewrite it as a concise keyword query that would "
