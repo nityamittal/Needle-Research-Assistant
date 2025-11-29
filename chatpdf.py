@@ -9,11 +9,11 @@ from langchain_community.document_loaders import PyMuPDFLoader
 from vertex_client import embed_texts, generate_text
 from vertex_vs_client import query_kb
 from vs_upsert import upsert_kb as vs_upsert_kb
-
+from metadata_store import upsert_kb_chunks_metadata
 
 # --- Config ---
 
-# embedding dimension: 768 for text-embedding-004
+# embedding dimension: 768 for text-embedding-004 (exposed for other modules if needed)
 EMBED_DIM = int(os.getenv("VERTEX_EMBED_DIM", "768"))
 
 TOP_K = int(os.getenv("KB_TOP_K", "5"))
@@ -21,13 +21,14 @@ TOP_K = int(os.getenv("KB_TOP_K", "5"))
 
 # --- Helpers ---
 
+
 def _chunk_text(text: str, max_tokens: int = 256, overlap: int = 64) -> List[str]:
     """Very rough word-based chunking for RAG."""
     words = text.split()
     chunks = []
     step = max_tokens - overlap
     for i in range(0, len(words), step):
-        chunk = " ".join(words[i: i + max_tokens])
+        chunk = " ".join(words[i : i + max_tokens])
         if chunk.strip():
             chunks.append(chunk)
     return chunks
@@ -67,7 +68,7 @@ def _extract_full_text(pdf_path: str) -> str:
 
 
 def upsert_kb(arxiv_id: str) -> None:
-    """Fetch arXiv paper, chunk it, embed with Vertex, and upsert into Vertex KB."""
+    """Fetch arXiv paper, chunk it, embed with Vertex, and upsert into Vertex KB + Firestore."""
     pdf_path, meta = _download_arxiv_pdf(arxiv_id)
     try:
         full_text = _extract_full_text(pdf_path)
@@ -79,38 +80,44 @@ def upsert_kb(arxiv_id: str) -> None:
 
     chunks = _chunk_text(full_text)
     if not chunks:
-        # from second file: explicit guard if text extraction fails
+        # explicit guard if text extraction fails
         raise RuntimeError("No text could be extracted from the PDF")
 
     vectors = _embed_chunks(chunks)
 
-    # base metadata for all chunks of this paper
     base_meta = {
         "arxiv_id": arxiv_id,
         "title": meta.title,
         "authors": ", ".join(a.name for a in meta.authors),
         "summary": meta.summary,
         "link": meta.entry_id,
+        "source": "arxiv",
     }
 
-    to_upsert = []
+    vs_items: List[Dict[str, Any]] = []
+    kb_meta_items: List[Dict[str, Any]] = []
+
     for i, (vec, chunk) in enumerate(zip(vectors, chunks)):
         chunk_id = f"{arxiv_id}_{i}"
-        metadata = dict(base_meta)
-        metadata["text"] = chunk
-        to_upsert.append(
+        m = dict(base_meta)
+        m.update({"id": chunk_id, "text": chunk})
+
+        vs_items.append(
             {
                 "id": chunk_id,
-                "vector": vec,  # key name must match vs_upsert
-                "metadata": metadata,
+                "vector": vec,
             }
         )
+        kb_meta_items.append(m)
 
-    vs_upsert_kb(to_upsert)
+    # Vector store upsert
+    vs_upsert_kb(vs_items)
+    # Firestore metadata upsert
+    upsert_kb_chunks_metadata(kb_meta_items)
 
 
 def upsert_pdf_file(pdf_path: str, title: str | None = None) -> str:
-    """Chunk a local PDF file and upsert it into the KB. Returns the document id used."""
+    """Chunk a local PDF file and upsert it into the KB + Firestore. Returns the document id used."""
     if not os.path.exists(pdf_path):
         raise FileNotFoundError(f"PDF not found: {pdf_path}")
 
@@ -131,36 +138,36 @@ def upsert_pdf_file(pdf_path: str, title: str | None = None) -> str:
         "source": "uploaded_pdf",
     }
 
-    to_upsert = []
+    vs_items: List[Dict[str, Any]] = []
+    kb_meta_items: List[Dict[str, Any]] = []
+
     for i, (vec, chunk) in enumerate(zip(vectors, chunks)):
         chunk_id = f"{doc_id_prefix}_{i}"
-        metadata = dict(base_meta)
-        metadata["text"] = chunk
-        to_upsert.append(
+        m = dict(base_meta)
+        m.update({"id": chunk_id, "text": chunk})
+
+        vs_items.append(
             {
                 "id": chunk_id,
                 "vector": vec,
-                "metadata": metadata,
             }
         )
+        kb_meta_items.append(m)
 
-    vs_upsert_kb(to_upsert)
+    vs_upsert_kb(vs_items)
+    upsert_kb_chunks_metadata(kb_meta_items)
     return doc_id_prefix
 
 
 def clear_kb() -> None:
-    """Placeholder for clearing the KB.
-
-    Vertex Vector Search streaming indexes don't have a simple 'delete_all' call.
-    To fully clear the KB, drop and recreate the KB index in the console.
-    """
+    """Not implemented: to fully clear KB, drop/recreate Vertex index + Firestore docs."""
     raise NotImplementedError(
-        "clear_kb is not implemented for Vertex Vector Search; drop/recreate the KB index instead."
+        "clear_kb is not implemented; drop/recreate the KB index and delete kb_chunks in Firestore."
     )
 
 
 def _retrieve(query: str, top_k: int = TOP_K) -> List[Dict[str, Any]]:
-    """Retrieve top_k chunks from Vertex Vector Search KB index."""
+    """Retrieve top_k chunks from KB (Vertex + Firestore)."""
     q_vec = embed_texts(query)[0]
     if hasattr(q_vec, "tolist"):
         emb = q_vec.tolist()
@@ -168,12 +175,13 @@ def _retrieve(query: str, top_k: int = TOP_K) -> List[Dict[str, Any]]:
         emb = list(q_vec)
 
     neighbors = query_kb(emb, top_k=top_k)
-    # neighbors already look like [{id, score, metadata}]
+    # neighbors should look like [{id, score, metadata}]
     return neighbors
 
 
 def chat(new_message: str, history: List[Dict[str, Any]]):
-    """RAG chat over your KB using Vertex AI + Vertex Vector Search.
+    """
+    RAG chat over your KB using Vertex AI + Vertex Vector Search + Firestore.
 
     history is a list of {"role": "user" | "assistant", "content": str, ...}
     Returns: (assistant_response: str, updated_history: list)
@@ -184,7 +192,7 @@ def chat(new_message: str, history: List[Dict[str, Any]]):
     context_blocks = []
     citation_meta = []
     for i, m in enumerate(matches, start=1):
-        # from second file: safer access via .get(...)
+        # safer access via .get(...)
         meta = m.get("metadata") or {}
         title = meta.get("title", "")
         text = (meta.get("text") or meta.get("summary") or "")[:1200]
