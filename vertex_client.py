@@ -1,50 +1,64 @@
 import os
 
-OFFLINE_MODE = os.getenv("OFFLINE_MODE", "0") == "1"
+import vertexai
+from vertexai.generative_models import GenerativeModel
+from vertexai.language_models import TextEmbeddingModel
 
-if not OFFLINE_MODE:
-    import vertexai
-    from vertexai.generative_models import GenerativeModel
-    from vertexai.language_models import TextEmbeddingModel
+from dotenv import load_dotenv
 
-    # --- Config ---
+load_dotenv()
 
-    PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("VERTEX_PROJECT_ID")
-    if not PROJECT_ID:
-        raise RuntimeError("Set GOOGLE_CLOUD_PROJECT or VERTEX_PROJECT_ID")
+# --- Config ---
 
-    LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("VERTEX_PROJECT_ID")
+if not PROJECT_ID:
+    raise RuntimeError("Set GOOGLE_CLOUD_PROJECT or VERTEX_PROJECT_ID")
 
-    CHAT_MODEL_NAME = os.getenv("VERTEX_CHAT_MODEL", "gemini-2.0-flash-001")
-    EMBED_MODEL_NAME = os.getenv("VERTEX_EMBED_MODEL", "text-embedding-004")
+LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
 
-    vertexai.init(project=PROJECT_ID, location=LOCATION)
+CHAT_MODEL_NAME = os.getenv("VERTEX_CHAT_MODEL", "gemini-2.0-flash-001")
+EMBED_MODEL_NAME = os.getenv("VERTEX_EMBED_MODEL", "text-embedding-004")
 
-    _gen_model = GenerativeModel(CHAT_MODEL_NAME)
-    _embed_model = TextEmbeddingModel.from_pretrained(EMBED_MODEL_NAME)
-else:
-    _gen_model = None
-    _embed_model = None
+# Max instances per embedding predict call.
+# Vertex is yelling at you at 1000 with a 250 limit, so stay <= 250.
+EMBED_MAX_PER_CALL = int(os.getenv("VERTEX_EMBED_MAX_PER_CALL", "250"))
+
+# init Vertex
+vertexai.init(project=PROJECT_ID, location=LOCATION)
+
+_gen_model = GenerativeModel(CHAT_MODEL_NAME)
+_embed_model = TextEmbeddingModel.from_pretrained(EMBED_MODEL_NAME)
 
 
 def embed_texts(texts):
-    """Return list of embedding vectors (list[list[float]]). Accepts str or list[str]."""
-    if OFFLINE_MODE:
-        if isinstance(texts, str):
-            texts = [texts]
-        dim = int(os.getenv("VERTEX_EMBED_DIM", "768"))
-        return [[0.0] * dim for _ in texts]
+    """
+    Return list of embedding vectors (list[list[float]]).
 
+    - Accepts str or list[str].
+    - Internally batches requests so we never send more than EMBED_MAX_PER_CALL
+      instances per predict call (Vertex hard-limit is 250).
+    """
     if isinstance(texts, str):
         texts = [texts]
-    embeddings = _embed_model.get_embeddings(texts)
-    return [e.values for e in embeddings]
+
+    if not texts:
+        return []
+
+    all_vectors = []
+
+    # Batch the calls to stay under the instance limit.
+    for i in range(0, len(texts), EMBED_MAX_PER_CALL):
+        batch = texts[i : i + EMBED_MAX_PER_CALL]
+        embeddings = _embed_model.get_embeddings(batch)
+
+        # embeddings is a list of objects with `.values`
+        for e in embeddings:
+            all_vectors.append(e.values)
+
+    return all_vectors
 
 
 def generate_text(prompt: str, **kwargs) -> str:
     """Simple wrapper around Gemini generate_content."""
-    if OFFLINE_MODE:
-        return "[OFFLINE_MODE] Vertex AI disabled for local UI work."
-
     resp = _gen_model.generate_content(prompt, **kwargs)
     return (resp.text or "").strip()
