@@ -124,6 +124,34 @@ def _render_citations(citations):
         st.markdown(line)
 
 
+def _call_chat_backend(prompt: str, history):
+    """
+    Small compatibility layer so we don't explode if `chat` changes its return type.
+
+    - New style: returns (assistant_response, updated_history)
+    - Old style: returns updated_history only, with last message holding assistant content
+    """
+    result = chat(prompt, history)
+
+    # New API: (assistant_response, updated_history)
+    if isinstance(result, tuple) and len(result) == 2:
+        assistant_response, updated_history = result
+        return assistant_response, updated_history
+
+    # Old API: just updated_history
+    updated_history = result
+    assistant_response = ""
+    try:
+        if updated_history:
+            last_msg = updated_history[-1]
+            assistant_response = last_msg.get("content", "") or ""
+    except Exception:
+        # Worst case, just show empty string; UI still won't crash
+        assistant_response = ""
+
+    return assistant_response, updated_history
+
+
 def llm_chat():
     _inject_copy_button_styles()
     st.title("Chat with Research")
@@ -157,19 +185,20 @@ def llm_chat():
                 _render_copy_button(content, f"history-{idx}")
                 _render_citations(message.get("citations") or [])
 
-    # chat input (placeholder from second file)
+    # chat input
     prompt = st.chat_input("Ask a question about your knowledge base...")
     if prompt:
         # show user message immediately
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        assistant_response, updated_history = chat(
+        assistant_response, updated_history = _call_chat_backend(
             prompt, st.session_state.messages
         )
         st.session_state.messages = updated_history
 
-        last_msg = updated_history[-1]
+        # Grab last message for citations (if present)
+        last_msg = updated_history[-1] if updated_history else {}
         with st.chat_message("assistant"):
             st.markdown(assistant_response)
             _render_copy_button(assistant_response, f"live-{len(updated_history)-1}")
