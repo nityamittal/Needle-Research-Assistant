@@ -114,7 +114,9 @@ Both indexes must use the same embedding dimension as your configured embedding 
 
 ## Setup
 
-### 1. Install dependencies
+### Install dependencies and run the app
 
 ```bash
 pip install -r requirements.txt
+streamlit run app.py
+
