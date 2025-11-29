@@ -13,3 +13,5 @@ google-cloud-aiplatform==1.70.0
 pinecone-client==3.2.2
 
 google-cloud-firestore==2.16.0
+
+vertexai>=1.0.0
