@@ -1,96 +1,104 @@
-# vertex_vs_client.py
 import os
 from typing import List, Dict, Any
 
+from dotenv import load_dotenv
 from google.cloud import aiplatform
 
-OFFLINE_MODE = os.getenv("OFFLINE_MODE", "0") == "1"
+from metadata_store import get_papers_metadata, get_kb_chunks_metadata
 
-if not OFFLINE_MODE:
-    PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
-    LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+load_dotenv()
 
-    if not PROJECT_ID:
-        raise RuntimeError("Set GOOGLE_CLOUD_PROJECT")
+PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
+LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
 
-    aiplatform.init(project=PROJECT_ID, location=LOCATION)
+if not PROJECT_ID:
+    raise RuntimeError("Set GOOGLE_CLOUD_PROJECT")
 
-    PAPERS_ENDPOINT_NAME = os.getenv("VS_PAPERS_ENDPOINT_NAME")  # full resource name
-    PAPERS_DEPLOYED_INDEX_ID = os.getenv("VS_PAPERS_DEPLOYED_INDEX_ID")
+aiplatform.init(project=PROJECT_ID, location=LOCATION)
 
-    KB_ENDPOINT_NAME = os.getenv("VS_KB_ENDPOINT_NAME")
-    KB_DEPLOYED_INDEX_ID = os.getenv("VS_KB_DEPLOYED_INDEX_ID")
+# Vertex Vector Search endpoints
+VS_PAPERS_ENDPOINT_NAME = os.getenv("VS_PAPERS_ENDPOINT_NAME")
+VS_PAPERS_DEPLOYED_INDEX_ID = os.getenv("VS_PAPERS_DEPLOYED_INDEX_ID")
 
-    if not all(
-        [PAPERS_ENDPOINT_NAME, PAPERS_DEPLOYED_INDEX_ID, KB_ENDPOINT_NAME, KB_DEPLOYED_INDEX_ID]
-    ):
-        raise RuntimeError("Vertex Vector Search env vars not set correctly")
+VS_KB_ENDPOINT_NAME = os.getenv("VS_KB_ENDPOINT_NAME")
+VS_KB_DEPLOYED_INDEX_ID = os.getenv("VS_KB_DEPLOYED_INDEX_ID")
 
-    papers_endpoint = aiplatform.MatchingEngineIndexEndpoint(
-        index_endpoint_name=PAPERS_ENDPOINT_NAME
+if not all([VS_PAPERS_ENDPOINT_NAME, VS_PAPERS_DEPLOYED_INDEX_ID]):
+    raise RuntimeError("VS_PAPERS_* endpoint env vars missing")
+
+_papers_endpoint = aiplatform.MatchingEngineIndexEndpoint(
+    index_endpoint_name=VS_PAPERS_ENDPOINT_NAME
+)
+
+_kb_endpoint = None
+if VS_KB_ENDPOINT_NAME and VS_KB_DEPLOYED_INDEX_ID:
+    _kb_endpoint = aiplatform.MatchingEngineIndexEndpoint(
+        index_endpoint_name=VS_KB_ENDPOINT_NAME
     )
-    kb_endpoint = aiplatform.MatchingEngineIndexEndpoint(
-        index_endpoint_name=KB_ENDPOINT_NAME
-    )
-else:
-    PAPERS_ENDPOINT_NAME = None
-    PAPERS_DEPLOYED_INDEX_ID = None
-    KB_ENDPOINT_NAME = None
-    KB_DEPLOYED_INDEX_ID = None
-    papers_endpoint = None
-    kb_endpoint = None
 
 
-def query_papers(embedding: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
-    """Query vs-papers-index with a single embedding."""
-    if OFFLINE_MODE:
-        return []
-
-    resp = papers_endpoint.find_neighbors(
-        deployed_index_id=PAPERS_DEPLOYED_INDEX_ID,
-        queries=[embedding],
+def _match(
+    endpoint: aiplatform.MatchingEngineIndexEndpoint,
+    deployed_index_id: str,
+    query_vector: List[float],
+    top_k: int,
+):
+    """
+    Use find_neighbors (managed Vertex API) instead of low-level .match()
+    so we don't hit the ':10000' gRPC private endpoint nonsense.
+    """
+    resp = endpoint.find_neighbors(
+        deployed_index_id=deployed_index_id,
+        queries=[query_vector],
         num_neighbors=top_k,
-        return_full_datapoint=True,  # needed for metadata
+        return_full_datapoint=False,  # we get metadata from Firestore, not Vertex
     )
+    return resp[0] if resp else []
 
-    neighbors = resp[0]
-    results = []
+
+def query_papers(query_vector: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
+    """
+    Query the 'papers' index and hydrate metadata from Firestore.
+    Returns: [{id, score, metadata}, ...]
+    """
+    neighbors = _match(_papers_endpoint, VS_PAPERS_DEPLOYED_INDEX_ID, query_vector, top_k)
+    ids = [n.id for n in neighbors]
+
+    meta_by_id = get_papers_metadata(ids)
+
+    results: List[Dict[str, Any]] = []
     for n in neighbors:
-        # structure depends on SDK version, but you get id, distance, and datapoint metadata
-        meta = getattr(n, "datapoint", None)
-        metadata = getattr(meta, "embedding_metadata", {}) if meta else {}
+        pid = n.id
         results.append(
             {
-                "id": n.id,
+                "id": pid,
                 "score": n.distance,
-                "metadata": metadata,
+                "metadata": meta_by_id.get(pid, {}),
             }
         )
     return results
 
 
-def query_kb(embedding: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
-    """Query vs-kb-index with a single embedding."""
-    if OFFLINE_MODE:
+def query_kb(query_vector: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
+    """
+    Same pattern for KB index (Chat with Research).
+    """
+    if _kb_endpoint is None:
         return []
 
-    resp = kb_endpoint.find_neighbors(
-        deployed_index_id=KB_DEPLOYED_INDEX_ID,
-        queries=[embedding],
-        num_neighbors=top_k,
-        return_full_datapoint=True,
-    )
+    neighbors = _match(_kb_endpoint, VS_KB_DEPLOYED_INDEX_ID, query_vector, top_k)
+    ids = [n.id for n in neighbors]
 
-    neighbors = resp[0]
-    results = []
+    meta_by_id = get_kb_chunks_metadata(ids)
+
+    results: List[Dict[str, Any]] = []
     for n in neighbors:
-        meta = getattr(n, "datapoint", None)
-        metadata = getattr(meta, "embedding_metadata", {}) if meta else {}
+        cid = n.id
         results.append(
             {
-                "id": n.id,
+                "id": cid,
                 "score": n.distance,
-                "metadata": metadata,
+                "metadata": meta_by_id.get(cid, {}),
             }
         )
     return results
