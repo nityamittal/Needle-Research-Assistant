@@ -572,42 +572,88 @@ def build_sidebar():
 
         # --- ArXiv Metadata Filters ---
         st.markdown("---")
+        # If we requested a filter reset in the previous run, apply those values into
+        # the session state BEFORE widget creation so the widgets show the new values.
+        if st.session_state.pop("_reset_filters", False):
+            reset_vals = st.session_state.pop("_reset_filter_vals", None)
+            if not reset_vals:
+                reset_vals = {
+                    "filter_category": "",
+                    "filter_year": "",
+                    "filter_author": "",
+                    "filter_keywords": "",
+                }
+            for k, v in reset_vals.items():
+                st.session_state[k] = v
+
         with st.expander("🔎 Filters (arXiv metadata)", expanded=False):
             # Conference/category
-            category = st.text_input(
-                "Category (e.g. cs.LG, stat.ML)",
-                value=st.session_state.get("filter_category", ""),
-                key="filter_category",
-                help="arXiv subject area, e.g. cs.LG for Machine Learning"
-            )
+            if "filter_category" in st.session_state:
+                category = st.text_input(
+                    "Category (e.g. cs.LG, stat.ML)",
+                    key="filter_category",
+                    help="arXiv subject area, e.g. cs.LG for Machine Learning"
+                )
+            else:
+                category = st.text_input(
+                    "Category (e.g. cs.LG, stat.ML)",
+                    value="",
+                    key="filter_category",
+                    help="arXiv subject area, e.g. cs.LG for Machine Learning"
+                )
             # Year
-            year = st.text_input(
-                "Year (e.g. 2022)",
-                value=st.session_state.get("filter_year", ""),
-                key="filter_year",
-                help="Year of publication (YYYY)"
-            )
+            if "filter_year" in st.session_state:
+                year = st.text_input(
+                    "Year (e.g. 2022)",
+                    key="filter_year",
+                    help="Year of publication (YYYY)"
+                )
+            else:
+                year = st.text_input(
+                    "Year (e.g. 2022)",
+                    value="",
+                    key="filter_year",
+                    help="Year of publication (YYYY)"
+                )
             # Author
-            author = st.text_input(
-                "Author (partial or full)",
-                value=st.session_state.get("filter_author", ""),
-                key="filter_author",
-                help="Author name (case-insensitive substring match)"
-            )
+            if "filter_author" in st.session_state:
+                author = st.text_input(
+                    "Author (partial or full)",
+                    key="filter_author",
+                    help="Author name (case-insensitive substring match)"
+                )
+            else:
+                author = st.text_input(
+                    "Author (partial or full)",
+                    value="",
+                    key="filter_author",
+                    help="Author name (case-insensitive substring match)"
+                )
             # Keywords
-            keywords = st.text_input(
-                "Keywords (comma-separated)",
-                value=st.session_state.get("filter_keywords", ""),
-                key="filter_keywords",
-                help="Keywords to match in title or abstract"
-            )
+            if "filter_keywords" in st.session_state:
+                keywords = st.text_input(
+                    "Keywords (comma-separated)",
+                    key="filter_keywords",
+                    help="Keywords to match in title or abstract"
+                )
+            else:
+                keywords = st.text_input(
+                    "Keywords (comma-separated)",
+                    value="",
+                    key="filter_keywords",
+                    help="Keywords to match in title or abstract"
+                )
 
             if st.button("Clear Filters", key="clear_filters", use_container_width=True):
-                st.session_state["filter_category"] = ""
-                st.session_state["filter_year"] = ""
-                st.session_state["filter_author"] = ""
-                st.session_state["filter_keywords"] = ""
-                st.success("Filters cleared")
+                reset_vals = {
+                    "filter_category": "",
+                    "filter_year": "",
+                    "filter_author": "",
+                    "filter_keywords": "",
+                }
+                st.session_state["_reset_filters"] = True
+                st.session_state["_reset_filter_vals"] = reset_vals
+                st.rerun()
 
         # Return selected nav key
 
