@@ -1,5 +1,6 @@
 import os
 import tempfile
+import html
 
 from citations import citation_count_for_year, citation_count_all_years
 from pdf_references import extract_references_from_pdf, annotate_results
@@ -352,6 +353,75 @@ def apply_needle_theme():
         [data-testid="stFileUploaderDropzone"] *,
         [data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] * {
             color: var(--needle-text) !important;  /* or just #fefefe */
+        }
+
+        /* KB chat warning + tooltip */
+        .kb-warning {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: rgba(23,96,194,0.15);
+            border: 1px solid rgba(255,255,255,0.12);
+            padding: 0.4rem 0.9rem;
+            border-radius: 999px;
+            color: var(--needle-text);
+            font-size: 0.9rem;
+            margin-bottom: 0.4rem;
+        }
+        .kb-warning-icon {
+            font-size: 1rem;
+        }
+        .kb-warning-text {
+            flex: 1;
+        }
+        .kb-tooltip {
+            position: relative;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.12);
+            border: 1px solid rgba(255,255,255,0.2);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.95rem;
+            cursor: help;
+        }
+        .kb-tooltip::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            bottom: calc(100% + 8px);
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(14,20,25,0.95);
+            color: #fff;
+            padding: 0.6rem 0.8rem;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            width: 200px;
+            max-width: 55vw;
+            text-align: left;
+            line-height: 1.3;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.15s ease-in-out;
+            z-index: 9999;
+        }
+        .kb-tooltip::before {
+            content: "";
+            position: absolute;
+            bottom: calc(100% + 2px);
+            left: 50%;
+            transform: translateX(-50%);
+            border-width: 6px;
+            border-style: solid;
+            border-color: rgba(14,20,25,0.95) transparent transparent transparent;
+            opacity: 0;
+            transition: opacity 0.15s ease-in-out;
+        }
+        .kb-tooltip:hover::after,
+        .kb-tooltip:hover::before {
+            opacity: 1;
         }
 
         </style>
@@ -869,20 +939,43 @@ def chat_with_research_ui():
 
     history = st.session_state["chat_history"]
 
+    tooltip_text = (
+        "Knowledge base is the set of documents that are present in our model's "
+        "'memory'. You can generate summary for these documents and ask specific "
+        "questions about them. To update the knowledge base please refer to 'Manage Library'."
+    )
+    warning_html = f"""
+        <div class="kb-warning">
+            <span class="kb-warning-icon">⚠️</span>
+            <span class="kb-warning-text">The answers are based on the documents available in Knowledge Base</span>
+            <span class="kb-tooltip" data-tooltip="{html.escape(tooltip_text)}">❔</span>
+        </div>
+    """.strip()
+
     # Show history
     for msg in history:
         role = msg.get("role")
         content = msg.get("content", "")
         if role == "assistant":
+            st.markdown(warning_html, unsafe_allow_html=True)
             st.markdown(f"**Assistant:** {content}")
         elif role == "user":
             st.markdown(f"**You:** {content}")
 
+    if st.button("Clear conversation", key="kb_clear_chat"):
+        st.session_state["chat_history"] = []
+        st.experimental_rerun()
+
     st.markdown("---")
 
-    user_input = st.text_input("Ask a question about papers in your KB:")
+    with st.form("kb_chat_form", clear_on_submit=True):
+        user_input = st.text_input(
+            "Ask a question about papers in your KB:",
+            key="kb_chat_input",
+        )
+        sent = st.form_submit_button("Send")
 
-    if st.button("Send") and user_input.strip():
+    if sent and user_input.strip():
         with st.spinner("Thinking with your KB..."):
             try:
                 answer, updated_history = kb_chat(user_input.strip(), history)
