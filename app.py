@@ -424,6 +424,48 @@ def apply_needle_theme():
             opacity: 1;
         }
 
+        /* KB chat bubbles */
+        .kb-chat-row {
+            display: flex;
+            margin-bottom: 0.6rem;
+        }
+        .kb-chat-row-assistant {
+            justify-content: flex-start;
+        }
+        .kb-chat-row-user {
+            justify-content: flex-end;
+        }
+        .kb-chat-bubble {
+            max-width: 80%;
+            padding: 0.7rem 0.9rem;
+            border-radius: 16px;
+            font-size: 0.92rem;
+            line-height: 1.4;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+        }
+        .kb-chat-bubble-assistant {
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.08);
+            color: var(--needle-text);
+        }
+        .kb-chat-bubble-user {
+            background: #2196f3;
+            border: 1px solid rgba(0,0,0,0.25);
+            color: #fff;
+        }
+        .kb-chat-meta {
+            font-size: 0.8rem;
+            opacity: 0.8;
+            margin-bottom: 0.25rem;
+        }
+        .kb-chat-bubble-user .kb-chat-meta {
+            color: rgba(255,255,255,0.9);
+        }
+        .kb-chat-text {
+            word-wrap: break-word;
+            white-space: pre-wrap;
+        }
+
         </style>
         """,
         unsafe_allow_html=True,
@@ -953,14 +995,34 @@ def chat_with_research_ui():
     """.strip()
 
     # Show history
+    warning_shown = False
     for msg in history:
         role = msg.get("role")
         content = msg.get("content", "")
+        escaped_content = html.escape(content).replace("\n", "<br>")
         if role == "assistant":
-            st.markdown(warning_html, unsafe_allow_html=True)
-            st.markdown(f"**Assistant:** {content}")
+            if not warning_shown:
+                st.markdown(warning_html, unsafe_allow_html=True)
+                warning_shown = True
+            assistant_html = f"""
+                <div class="kb-chat-row kb-chat-row-assistant">
+                    <div class="kb-chat-bubble kb-chat-bubble-assistant">
+                        <div class="kb-chat-meta">Assistant</div>
+                        <div class="kb-chat-text">{escaped_content}</div>
+                    </div>
+                </div>
+            """
+            st.markdown(assistant_html, unsafe_allow_html=True)
         elif role == "user":
-            st.markdown(f"**You:** {content}")
+            user_html = f"""
+                <div class="kb-chat-row kb-chat-row-user">
+                    <div class="kb-chat-bubble kb-chat-bubble-user">
+                        <div class="kb-chat-meta">You</div>
+                        <div class="kb-chat-text">{escaped_content}</div>
+                    </div>
+                </div>
+            """
+            st.markdown(user_html, unsafe_allow_html=True)
 
     if st.button("Clear conversation", key="kb_clear_chat"):
         st.session_state["chat_history"] = []
