@@ -456,43 +456,85 @@ def build_sidebar():
             vertex_client = None
             current_opts = {}
 
+        # If we requested a reset in the previous run, apply those values into
+        # the session state BEFORE widget creation so the widgets show the new values.
+        if st.session_state.pop("_reset_gen_defaults", False):
+            # Prefer explicit reset values if present, otherwise read from vertex_client
+            reset_vals = st.session_state.pop("_reset_gen_vals", None)
+            if not reset_vals and vertex_client is not None:
+                reset_vals = vertex_client.get_gen_options()
+
+            if reset_vals:
+                # set widget-backed keys so the widgets pick these up on creation
+                st.session_state["gen_temperature"] = float(reset_vals.get("temperature", 0.0))
+                st.session_state["gen_max_output_tokens"] = int(reset_vals.get("max_output_tokens", 0))
+                st.session_state["gen_top_k"] = int(reset_vals.get("top_k", 0))
+
         with st.expander("⚙️ Model Settings", expanded=False):
-            temp = st.slider(
-                "Temperature",
-                0.0,
-                1.0,
-                value=float(current_opts.get("temperature", 0.0)),
-                step=0.01,
-                key="gen_temperature",
-                help="Lower = more deterministic, Higher = more creative"
-            )
-            max_tokens = st.number_input(
-                "Max output tokens",
-                min_value=16,
-                max_value=65536,
-                value=int(current_opts.get("max_output_tokens", 256)),
-                step=1,
-                key="gen_max_output_tokens",
-                help="Maximum length of generated response"
-            )
-            top_p = st.slider(
-                "Top-p (nucleus sampling)",
-                0.0,
-                1.0,
-                value=float(current_opts.get("top_p", 1.0)),
-                step=0.01,
-                key="gen_top_p",
-                help="Cumulative probability for sampling (0.9 = top 90%)"
-            )
-            top_k = st.number_input(
-                "Top-k",
-                min_value=0,
-                max_value=1000,
-                value=int(current_opts.get("top_k", 0)),
-                step=1,
-                key="gen_top_k",
-                help="Number of highest probability tokens to sample from (0 = disabled)"
-            )
+            # Build widgets carefully: if a key already exists in session_state
+            # (for example after a reset), avoid passing a `value=` argument to
+            # the widget since Streamlit will raise if a widget is created with
+            # both a default value and a session value. Instead let the widget
+            # read the value from session_state by omitting `value`.
+            if "gen_temperature" in st.session_state:
+                temp = st.slider(
+                    "Temperature",
+                    0.0,
+                    1.0,
+                    step=0.01,
+                    key="gen_temperature",
+                    help="Lower = more deterministic, Higher = more creative",
+                )
+            else:
+                temp = st.slider(
+                    "Temperature",
+                    0.0,
+                    1.0,
+                    value=float(current_opts.get("temperature", 0.0)),
+                    step=0.01,
+                    key="gen_temperature",
+                    help="Lower = more deterministic, Higher = more creative",
+                )
+
+            if "gen_max_output_tokens" in st.session_state:
+                max_tokens = st.number_input(
+                    "Max output tokens (0 = disabled)",
+                    min_value=0,
+                    max_value=65536,
+                    step=1,
+                    key="gen_max_output_tokens",
+                    help="Maximum length of generated response; set to 0 to let the model use its default",
+                )
+            else:
+                max_tokens = st.number_input(
+                    "Max output tokens (0 = disabled)",
+                    min_value=0,
+                    max_value=65536,
+                    value=int(current_opts.get("max_output_tokens", 0)),
+                    step=1,
+                    key="gen_max_output_tokens",
+                    help="Maximum length of generated response; set to 0 to let the model use its default",
+                )
+
+            if "gen_top_k" in st.session_state:
+                top_k = st.number_input(
+                    "Top-k",
+                    min_value=0,
+                    max_value=1000,
+                    step=1,
+                    key="gen_top_k",
+                    help="Number of highest probability tokens to sample from (0 = disabled)",
+                )
+            else:
+                top_k = st.number_input(
+                    "Top-k",
+                    min_value=0,
+                    max_value=1000,
+                    value=int(current_opts.get("top_k", 0)),
+                    step=1,
+                    key="gen_top_k",
+                    help="Number of highest probability tokens to sample from (0 = disabled)",
+                )
 
             if st.button("Apply Settings", key="apply_gen_opts", use_container_width=True):
                 if vertex_client is None:
@@ -501,7 +543,6 @@ def build_sidebar():
                     new_opts = {
                         "temperature": float(temp),
                         "max_output_tokens": int(max_tokens),
-                        "top_p": float(top_p),
                         "top_k": int(top_k),
                     }
                     try:
@@ -509,6 +550,25 @@ def build_sidebar():
                         st.success("✓ Settings updated")
                     except Exception as e:
                         st.error(f"Failed: {e}")
+
+            if st.button("Reset to recommended defaults", key="reset_gen_defaults", use_container_width=True):
+                if vertex_client is None:
+                    st.error("Vertex client not available.")
+                else:
+                    recommended = {
+                        "temperature": 0.0,
+                        "max_output_tokens": 0,
+                        "top_k": 0,
+                    }
+                    try:
+                        # Update the runtime defaults in the vertex client
+                        vertex_client.set_gen_options(recommended)
+                        # Store a flag so the next run can inject these into widget state
+                        st.session_state["_reset_gen_defaults"] = True
+                        st.session_state["_reset_gen_vals"] = recommended
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to set defaults: {e}")
 
         # --- ArXiv Metadata Filters ---
         st.markdown("---")
@@ -1046,7 +1106,7 @@ def update_kb_ui():
                 with st.spinner(f"Deleting {selected_label} ..."):
                     deleted = delete_kb_document(doc_id_prefix)
                 st.success(f"Deleted {deleted} chunks for {selected_label}.")
-                st.experimental_rerun()
+                st.rerun()
 
 
     st.markdown("---")
@@ -1102,7 +1162,7 @@ def chat_with_research_ui():
 
     if st.button("Clear conversation", key="kb_clear_chat"):
         st.session_state["chat_history"] = []
-        st.experimental_rerun()
+        st.rerun()
 
     st.markdown("---")
 
@@ -1122,7 +1182,7 @@ def chat_with_research_ui():
                 return
 
         st.session_state["chat_history"] = updated_history
-        st.experimental_rerun()
+        st.rerun()
 
 
 # --- Main app routing ---

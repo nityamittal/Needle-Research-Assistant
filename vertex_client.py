@@ -36,8 +36,8 @@ _embed_model = TextEmbeddingModel.from_pretrained(EMBED_MODEL_NAME)
 # --- Runtime generation options (configurable at runtime) ---
 GEN_OPTIONS = {
     "temperature": float(os.getenv("VERTEX_TEMPERATURE", "0.0")),
-    "max_output_tokens": int(os.getenv("VERTEX_MAX_OUTPUT_TOKENS", "256")),
-    "top_p": float(os.getenv("VERTEX_TOP_P", "1.0")),
+    # 0 means 'disabled' (do not send this field to the model -> model default)
+    "max_output_tokens": int(os.getenv("VERTEX_MAX_OUTPUT_TOKENS", "0")),
     "top_k": int(os.getenv("VERTEX_TOP_K", "0")),
 }
 
@@ -141,6 +141,17 @@ def generate_text(prompt: str, **kwargs) -> str:
     # Merge provided kwargs with defaults from GEN_OPTIONS
     call_opts = dict(GEN_OPTIONS)
     call_opts.update(kwargs or {})
-    
-    resp = _gen_model.generate_content(prompt, **call_opts)
+
+    # Only pass generation parameters inside generation_config
+    gen_config = {
+        "temperature": call_opts.get("temperature"),
+    }
+    max_out = call_opts.get("max_output_tokens")
+    if isinstance(max_out, int) and max_out >= 1:
+        gen_config["max_output_tokens"] = max_out
+    top_k_val = call_opts.get("top_k")
+    if isinstance(top_k_val, int) and top_k_val >= 1:
+        gen_config["top_k"] = top_k_val
+
+    resp = _gen_model.generate_content(prompt, generation_config=gen_config)
     return (resp.text or "").strip()
