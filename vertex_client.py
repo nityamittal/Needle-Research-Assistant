@@ -33,6 +33,42 @@ _gen_model = GenerativeModel(CHAT_MODEL_NAME)
 _embed_model = TextEmbeddingModel.from_pretrained(EMBED_MODEL_NAME)
 
 
+# --- Runtime generation options (configurable at runtime) ---
+GEN_OPTIONS = {
+    "temperature": float(os.getenv("VERTEX_TEMPERATURE", "0.0")),
+    "max_output_tokens": int(os.getenv("VERTEX_MAX_OUTPUT_TOKENS", "256")),
+    "top_p": float(os.getenv("VERTEX_TOP_P", "1.0")),
+    "top_k": int(os.getenv("VERTEX_TOP_K", "0")),
+}
+
+
+def set_gen_options(opts: dict):
+    """Update generation options at runtime.
+    
+    Keys not present in `opts` are left unchanged. Values are stored in
+    the module-level GEN_OPTIONS mapping and used as defaults for subsequent
+    `generate_text` calls.
+    """
+    for k, v in (opts or {}).items():
+        if k in GEN_OPTIONS:
+            try:
+                # try to coerce numeric types safely
+                if isinstance(GEN_OPTIONS[k], int):
+                    GEN_OPTIONS[k] = int(v)
+                elif isinstance(GEN_OPTIONS[k], float):
+                    GEN_OPTIONS[k] = float(v)
+                else:
+                    GEN_OPTIONS[k] = v
+            except Exception:
+                # if conversion fails, just set raw
+                GEN_OPTIONS[k] = v
+
+
+def get_gen_options() -> dict:
+    """Return a shallow copy of the current generation options."""
+    return dict(GEN_OPTIONS)
+
+
 def _approx_tokens(s: str) -> int:
     """
     Super rough token estimate so we don't blow past Vertex limits.
@@ -97,6 +133,14 @@ def embed_texts(texts):
 
 
 def generate_text(prompt: str, **kwargs) -> str:
-    """Simple wrapper around Gemini generate_content."""
-    resp = _gen_model.generate_content(prompt, **kwargs)
+    """Simple wrapper around Gemini generate_content.
+    
+    Merges provided kwargs with defaults from GEN_OPTIONS. Call-specific
+    kwargs take precedence.
+    """
+    # Merge provided kwargs with defaults from GEN_OPTIONS
+    call_opts = dict(GEN_OPTIONS)
+    call_opts.update(kwargs or {})
+    
+    resp = _gen_model.generate_content(prompt, **call_opts)
     return (resp.text or "").strip()

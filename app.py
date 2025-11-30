@@ -445,6 +445,111 @@ def build_sidebar():
             label_visibility="collapsed",
         )
         st.caption("AI research assistant for rapid discovery.")
+        
+
+        # Model generation configuration controls
+        st.markdown("---")
+        try:
+            import vertex_client
+            current_opts = vertex_client.get_gen_options()
+        except Exception:
+            vertex_client = None
+            current_opts = {}
+
+        with st.expander("⚙️ Model Settings", expanded=False):
+            temp = st.slider(
+                "Temperature",
+                0.0,
+                1.0,
+                value=float(current_opts.get("temperature", 0.0)),
+                step=0.01,
+                key="gen_temperature",
+                help="Lower = more deterministic, Higher = more creative"
+            )
+            max_tokens = st.number_input(
+                "Max output tokens",
+                min_value=16,
+                max_value=65536,
+                value=int(current_opts.get("max_output_tokens", 256)),
+                step=1,
+                key="gen_max_output_tokens",
+                help="Maximum length of generated response"
+            )
+            top_p = st.slider(
+                "Top-p (nucleus sampling)",
+                0.0,
+                1.0,
+                value=float(current_opts.get("top_p", 1.0)),
+                step=0.01,
+                key="gen_top_p",
+                help="Cumulative probability for sampling (0.9 = top 90%)"
+            )
+            top_k = st.number_input(
+                "Top-k",
+                min_value=0,
+                max_value=1000,
+                value=int(current_opts.get("top_k", 0)),
+                step=1,
+                key="gen_top_k",
+                help="Number of highest probability tokens to sample from (0 = disabled)"
+            )
+
+            if st.button("Apply Settings", key="apply_gen_opts", use_container_width=True):
+                if vertex_client is None:
+                    st.error("Vertex client not available.")
+                else:
+                    new_opts = {
+                        "temperature": float(temp),
+                        "max_output_tokens": int(max_tokens),
+                        "top_p": float(top_p),
+                        "top_k": int(top_k),
+                    }
+                    try:
+                        vertex_client.set_gen_options(new_opts)
+                        st.success("✓ Settings updated")
+                    except Exception as e:
+                        st.error(f"Failed: {e}")
+
+        # --- ArXiv Metadata Filters ---
+        st.markdown("---")
+        with st.expander("🔎 Filters (arXiv metadata)", expanded=False):
+            # Conference/category
+            category = st.text_input(
+                "Category (e.g. cs.LG, stat.ML)",
+                value=st.session_state.get("filter_category", ""),
+                key="filter_category",
+                help="arXiv subject area, e.g. cs.LG for Machine Learning"
+            )
+            # Year
+            year = st.text_input(
+                "Year (e.g. 2022)",
+                value=st.session_state.get("filter_year", ""),
+                key="filter_year",
+                help="Year of publication (YYYY)"
+            )
+            # Author
+            author = st.text_input(
+                "Author (partial or full)",
+                value=st.session_state.get("filter_author", ""),
+                key="filter_author",
+                help="Author name (case-insensitive substring match)"
+            )
+            # Keywords
+            keywords = st.text_input(
+                "Keywords (comma-separated)",
+                value=st.session_state.get("filter_keywords", ""),
+                key="filter_keywords",
+                help="Keywords to match in title or abstract"
+            )
+
+            if st.button("Clear Filters", key="clear_filters", use_container_width=True):
+                st.session_state["filter_category"] = ""
+                st.session_state["filter_year"] = ""
+                st.session_state["filter_author"] = ""
+                st.session_state["filter_keywords"] = ""
+                st.success("Filters cleared")
+
+        # Return selected nav key
 
     return selected
 
@@ -480,8 +585,41 @@ def _build_results_table(query_matches):
         "Score": [],
     }
 
+
+    # --- Filter logic ---
+    def passes_filters(meta):
+        # Category
+        category = st.session_state.get("filter_category", "").strip().lower()
+        if category:
+            meta_cat = str(meta.get("categories", "")).lower()
+            if category not in meta_cat:
+                return False
+        # Year
+        year = st.session_state.get("filter_year", "").strip()
+        if year:
+            meta_year = str(meta.get("latest_creation_date", ""))[:4]
+            if year != meta_year:
+                return False
+        # Author
+        author = st.session_state.get("filter_author", "").strip().lower()
+        if author:
+            meta_authors = str(meta.get("authors", "")).lower()
+            if author not in meta_authors:
+                return False
+        # Keywords
+        keywords = st.session_state.get("filter_keywords", "").strip().lower()
+        if keywords:
+            kw_list = [kw.strip() for kw in keywords.split(",") if kw.strip()]
+            meta_title = str(meta.get("title", "")).lower()
+            meta_abstract = str(meta.get("abstract", "")).lower()
+            if not any(kw in meta_title or kw in meta_abstract for kw in kw_list):
+                return False
+        return True
+
     for match in query_matches:
         meta = match.get("metadata") or {}
+        if not passes_filters(meta):
+            continue
 
         title = meta.get("title") or f"arXiv {match.get('id', '')}"
         authors = meta.get("authors") or ""
@@ -561,7 +699,7 @@ def _build_results_table_with_citations(query_matches):
     if "Date" in df.columns and df["Date"].notna().any():
         df_sorted = df.sort_values(by="Date", ascending=False)
     else:
-        df_sorted = df.sort_values(by("Score"), ascending=True)
+        df_sorted = df.sort_values(by="Score", ascending=True)
 
     return df_sorted
 
