@@ -231,6 +231,8 @@ def chat(new_message: str, history: List[Dict[str, Any]]):
         "You are a research assistant. Answer the question using ONLY the provided context. "
         "If the context is not sufficient, say you don't know. "
         "Cite sources inline as [1], [2], etc. matching the numbered context chunks."
+        "If the question is about summarizing a paper related to the provided context, you should ALWAYS follow up with what kind of summary the user wants (e.g., key contributions, abstract, etc.) before attempting to answer."
+        "Always end your interaction with a follow-up question to the user asking for more details about what they want to know about the provided context."
     )
 
     full_prompt = (
