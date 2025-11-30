@@ -38,7 +38,15 @@ def query_pinecone(embedding, top_k: int = TOP_K):
     else:
         emb = list(embedding)
 
-    neighbors = query_papers(emb, top_k=top_k)
+    # Ensure top_k is a sane positive integer (fallback to env default)
+    try:
+        effective_top_k = int(top_k)
+        if effective_top_k <= 0:
+            effective_top_k = TOP_K
+    except Exception:
+        effective_top_k = TOP_K
+
+    neighbors = query_papers(emb, top_k=effective_top_k)
 
     # app.py expects [{"matches": [...] }]
     return [{"matches": neighbors}]
