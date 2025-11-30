@@ -634,14 +634,34 @@ def build_sidebar():
                 category = st.text_input(
                     "Category (e.g. cs.LG, stat.ML)",
                     key="filter_category",
-                    help="arXiv subject area, e.g. cs.LG for Machine Learning"
+                    help="arXiv subject area, e.g. cs.LG for Machine Learning. See the full taxonomy at https://arxiv.org/category_taxonomy"
                 )
             else:
                 category = st.text_input(
                     "Category (e.g. cs.LG, stat.ML)",
                     value="",
                     key="filter_category",
-                    help="arXiv subject area, e.g. cs.LG for Machine Learning"
+                    help="arXiv subject area, e.g. cs.LG for Machine Learning. See the full taxonomy at https://arxiv.org/category_taxonomy"
+                )
+            # Number of papers (top_k)
+            if "filter_num_papers" in st.session_state:
+                num_papers = st.number_input(
+                    "Number of Papers",
+                    min_value=1,
+                    max_value=100,
+                    step=1,
+                    key="filter_num_papers",
+                    help="How many top similar papers to retrieve",
+                )
+            else:
+                num_papers = st.number_input(
+                    "Number of Papers",
+                    min_value=1,
+                    max_value=100,
+                    value=10,
+                    step=1,
+                    key="filter_num_papers",
+                    help="How many top similar papers to retrieve",
                 )
             # Year
             if "filter_year" in st.session_state:
@@ -689,6 +709,7 @@ def build_sidebar():
             if st.button("Clear Filters", key="clear_filters", use_container_width=True):
                 reset_vals = {
                     "filter_category": "",
+                    "filter_num_papers": 10,
                     "filter_year": "",
                     "filter_author": "",
                     "filter_keywords": "",
@@ -965,7 +986,8 @@ def prompt_to_paper_ui():
             with st.spinner("Turning your prompt into a search + querying papers..."):
                 rewritten = prompt_to_query(user_prompt)
                 emb = generate_embeddings(rewritten)
-                query_results = query_pinecone(emb)
+                num_papers = int(st.session_state.get("filter_num_papers", 10))
+                query_results = query_pinecone(emb, top_k=num_papers)
                 if not query_results:
                     st.error("No results from the index.")
                     st.session_state.pop("prompt_results", None)
@@ -1046,7 +1068,9 @@ def pdf_to_paper_ui():
 
             # 3) embed + query Pinecone
             emb = generate_embeddings(text)
-            query_results = query_pinecone(emb)
+            # Use adjustable number of papers from filters (default 10)
+            num_papers = int(st.session_state.get("filter_num_papers", 10))
+            query_results = query_pinecone(emb, top_k=num_papers)
             if not query_results:
                 st.error("No results from the index.")
                 st.session_state.pop("pdf_results", None)
