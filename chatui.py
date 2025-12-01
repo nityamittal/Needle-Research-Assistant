@@ -186,7 +186,7 @@ def llm_chat():
                 _render_citations(message.get("citations") or [])
 
     # chat input
-    prompt = st.chat_input("Ask a question about your knowledge base...")
+    prompt = st.chat_input("Ask a question about your Library...")
     if prompt:
         # show user message immediately
         with st.chat_message("user"):

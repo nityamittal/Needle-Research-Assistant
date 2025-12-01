@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from pdf2pdf import extract_text, generate_embeddings, query_pinecone, prompt_to_query
 from chatpdf import upsert_kb, upsert_pdf_file, chat as kb_chat, clear_kb
 from metadata_store import get_kb_description, set_kb_description, list_kb_documents, delete_kb_document
+from guide import render_section_heading, home_ui
 
 
 load_dotenv()
@@ -29,31 +30,14 @@ st.set_page_config(
 # -------------------------------------------------------------------
 
 NAV_ITEMS = [
-    {"key": "prompt", "label": "Discover Papers using Prompts",     "icon": "🔍"},
-    {"key": "pdf",    "label": "Discover Papers using a PDF",       "icon": "📄"},
+    {"key": "home",   "label": "Guide / Home",                    "icon": "🏠"},
+    {"key": "discover", "label": "Discover Papers",               "icon": "🔍"},
     {"key": "chat",   "label": "Ask Your Library",    "icon": "💬"},
     {"key": "kb",     "label": "Manage Library",      "icon": "📚"},
 ]
 
-
-SECTION_COPY = {
-    "prompt": {
-        "title": "Discover Papers using Prompts",
-        "subtitle": "Search arXiv with natural language: Describe what you want and Needle will turn it into a paper search!",
-    },
-    "pdf": {
-        "title": "Discover Papers using a PDF",
-        "subtitle": "Upload a PDF and instantly find related arXiv papers!",
-    },
-    "chat": {
-        "title": "Ask Your Library",
-        "subtitle": "Ask questions grounded in the papers in your knowledge base!",
-    },
-    "kb": {
-        "title": "Manage Library",
-        "subtitle": "Add arXiv papers or local PDFs into your research knowledge base!",
-    },
-}
+# Simple in-memory cache for citation counts (all years).
+_CITATION_COUNT_CACHE_ALL_YEARS: dict[str, int] = {}
 
 def apply_needle_theme():
     st.markdown(
@@ -142,10 +126,11 @@ def apply_needle_theme():
         .needle-section-title {
             text-align: left;
             margin-bottom: 1.5rem;
-            max-width: 850px;
-            margin-left: auto;
-            margin-right: auto;
+            max-width: 100%;
+            margin-left: 0;
+            margin-right: 0;
         }
+
         .needle-section-title h2 {
             color: var(--needle-text);
             margin-bottom: 0.25rem;
@@ -512,7 +497,7 @@ def build_sidebar():
                 st.session_state["gen_max_output_tokens"] = int(reset_vals.get("max_output_tokens", 0))
                 st.session_state["gen_top_k"] = int(reset_vals.get("top_k", 0))
 
-        with st.expander("⚙️ Model Settings", expanded=False):
+        with st.expander("⚙️ Model Settings (For Experts)", expanded=False):
             # Build widgets carefully: if a key already exists in session_state
             # (for example after a reset), avoid passing a `value=` argument to
             # the widget since Streamlit will raise if a widget is created with
@@ -717,24 +702,9 @@ def build_sidebar():
     return selected
 
 
-def render_section_heading(mode_key: str):
-    copy = SECTION_COPY.get(mode_key)
-    if not copy:
-        return
-    st.markdown(
-        f"""
-        <div class="needle-section-title">
-            <h2>{copy['title']}</h2>
-            <p>{copy['subtitle']}</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
 # -------------------------------------------------------------------
 # Core logic from your original second script (unchanged behavior)
 # -------------------------------------------------------------------
-
 
 def _build_results_table(query_matches):
     """Turn vector search matches into a DataFrame with link + metadata."""
@@ -745,7 +715,8 @@ def _build_results_table(query_matches):
         "Date": [],
         "DOI": [],
         "Link": [],
-        "Score": [],
+        "Similarity Score": [],
+        "Citations": [],
     }
 
 
@@ -795,13 +766,29 @@ def _build_results_table(query_matches):
         if not pdf_url and arxiv_id:
             pdf_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
 
+        citations_str = ""
+        if doi:
+            try:
+                key = str(doi).strip()
+                if key:
+                    cached = _CITATION_COUNT_CACHE_ALL_YEARS.get(key)
+                    if cached is None:
+                        count, _ = citation_count_all_years(key)
+                        _CITATION_COUNT_CACHE_ALL_YEARS[key] = count
+                        citations_str = str(count)
+                    else:
+                        citations_str = str(cached)
+            except Exception as e:
+                print(f"[WARN] Failed to fetch total citations for DOI {doi}: {e}")
+
         table["Title"].append(title)
         table["Authors"].append(authors)
         table["Abstract"].append(abstract)
         table["Date"].append(date)
         table["DOI"].append(doi)
         table["Link"].append(pdf_url or "")
-        table["Score"].append(match.get("score"))
+        table["Similarity Score"].append(match.get("score"))
+        table["Citations"].append(citations_str)
 
     if not table["Title"]:
         return None
@@ -811,7 +798,7 @@ def _build_results_table(query_matches):
     if "Date" in df.columns and df["Date"].notna().any():
         df_sorted = df.sort_values(by="Date", ascending=False)
     else:
-        df_sorted = df.sort_values(by="Score", ascending=True)
+        df_sorted = df.sort_values(by="Similarity Score", ascending=True)
 
     return df_sorted
 
@@ -823,9 +810,10 @@ def _build_results_table_with_citations(query_matches):
         "Abstract": [],
         "Link": [],
         "Date": [],
-        "Score": [],
+        "Similarity Score": [],
         "DOI": [],
         "Cited in PDF": [],
+        "Citations": [],
     }
 
     for match in query_matches:
@@ -845,14 +833,30 @@ def _build_results_table_with_citations(query_matches):
         # cited flag from annotate_results; default False
         linked = bool(match.get("linked_in_pdf", False))
 
+        citations_str = ""
+        if doi:
+            try:
+                key = str(doi).strip()
+                if key:
+                    cached = _CITATION_COUNT_CACHE_ALL_YEARS.get(key)
+                    if cached is None:
+                        count, _ = citation_count_all_years(key)
+                        _CITATION_COUNT_CACHE_ALL_YEARS[key] = count
+                        citations_str = str(count)
+                    else:
+                        citations_str = str(cached)
+            except Exception as e:
+                print(f"[WARN] Failed to fetch total citations for DOI {doi}: {e}")
+
         table["Title"].append(title)
         table["Authors"].append(authors)
         table["Abstract"].append(abstract)
         table["Date"].append(date)
         table["DOI"].append(doi)
         table["Link"].append(pdf_url or "")
-        table["Score"].append(match.get("score"))
+        table["Similarity Score"].append(match.get("score"))
         table["Cited in PDF"].append("✅" if linked else "❌")
+        table["Citations"].append(citations_str)
 
     if not table["Title"]:
         return None
@@ -862,7 +866,7 @@ def _build_results_table_with_citations(query_matches):
     if "Date" in df.columns and df["Date"].notna().any():
         df_sorted = df.sort_values(by="Date", ascending=False)
     else:
-        df_sorted = df.sort_values(by="Score", ascending=True)
+        df_sorted = df.sort_values(by="Similarity Score", ascending=True)
 
     return df_sorted
 
@@ -962,50 +966,110 @@ def _render_citation_tools(df: pd.DataFrame):
 # --- UI Pieces ---
 
 
-def prompt_to_paper_ui():
-    # --- search form ---
-    with st.form(key="search_form"):
+def discover_papers_ui():
+    with st.form(key="discover_form", clear_on_submit=True):
         user_prompt = st.text_input(
             "Describe what you're looking for (topic, question, idea):",
+            key="discover_prompt",
             placeholder="e.g. diffusion models for text-to-image, evaluation on MS COCO...",
+        )
+        uploaded_file = st.file_uploader(
+            "Or upload a PDF to find similar papers:",
+            type=["pdf"],
+            key="discover_pdf_file",
         )
         submitted = st.form_submit_button("Search")
 
-    # When the form is submitted, run the search and store the results
     if submitted:
-        if not user_prompt.strip():
-            st.warning("Please type something before searching.")
-            st.session_state.pop("prompt_results", None)
-        else:
-            with st.spinner("Turning your prompt into a search + querying papers..."):
-                rewritten = prompt_to_query(user_prompt)
+        prompt_text = (user_prompt or "").strip()
+        has_prompt = bool(prompt_text)
+        has_pdf = uploaded_file is not None
+
+        if has_prompt and has_pdf:
+            st.error("Please use either a prompt or a PDF, not both at the same time.")
+            st.session_state.pop("discover_results", None)
+            st.session_state.pop("discover_source", None)
+        elif not has_prompt and not has_pdf:
+            st.warning("Type a prompt or upload a PDF first.")
+            st.session_state.pop("discover_results", None)
+            st.session_state.pop("discover_source", None)
+        elif has_prompt:
+            with st.spinner("Turning your prompt into a search and querying papers..."):
+                rewritten = prompt_to_query(prompt_text)
                 emb = generate_embeddings(rewritten)
                 num_papers = int(st.session_state.get("filter_num_papers", 10))
                 query_results = query_pinecone(emb, top_k=num_papers)
                 if not query_results:
                     st.error("No results from the index.")
-                    st.session_state.pop("prompt_results", None)
+                    st.session_state.pop("discover_results", None)
+                    st.session_state.pop("discover_source", None)
                 else:
                     query_matches = query_results[0].get("matches", [])
                     df_sorted = _build_results_table(query_matches)
                     if df_sorted is None:
                         st.error("No usable metadata returned for this query.")
-                        st.session_state.pop("prompt_results", None)
+                        st.session_state.pop("discover_results", None)
+                        st.session_state.pop("discover_source", None)
                     else:
-                        # store DataFrame in session so it survives button clicks
-                        st.session_state["prompt_results"] = df_sorted
+                        st.session_state["discover_results"] = df_sorted
+                        st.session_state["discover_source"] = "prompt"
+        else:
+            with st.spinner("Reading your PDF and querying the index..."):
+                fd, tmp_path = tempfile.mkstemp(suffix=".pdf")
+                try:
+                    with os.fdopen(fd, "wb") as f:
+                        f.write(uploaded_file.read())
 
-    # --- always render the last results if we have them ---
-    df_sorted = st.session_state.get("prompt_results")
+                    text = extract_text(tmp_path)
+                    if not text or len(text.split()) <= 5:
+                        st.error("Couldn't extract enough text from that PDF.")
+                        st.session_state.pop("discover_results", None)
+                        st.session_state.pop("discover_source", None)
+                        return
 
-    if df_sorted is None or df_sorted.empty:
-        # nothing to show yet
+                    try:
+                        references = extract_references_from_pdf(tmp_path)
+                    except Exception as e:
+                        print(f"[WARN] failed to extract references from PDF: {e}")
+                        references = None
+                finally:
+                    try:
+                        os.remove(tmp_path)
+                    except OSError:
+                        pass
+
+            emb = generate_embeddings(text)
+            num_papers = int(st.session_state.get("filter_num_papers", 10))
+            query_results = query_pinecone(emb, top_k=num_papers)
+            if not query_results:
+                st.error("No results from the index.")
+                st.session_state.pop("discover_results", None)
+                st.session_state.pop("discover_source", None)
+            else:
+                query_matches = query_results[0].get("matches", []) or []
+                if references:
+                    query_matches = annotate_results(query_matches, references)
+
+                df_sorted = _build_results_table_with_citations(query_matches)
+                if df_sorted is None:
+                    st.error("No usable metadata returned for this PDF.")
+                    st.session_state.pop("discover_results", None)
+                    st.session_state.pop("discover_source", None)
+                else:
+                    st.session_state["discover_results"] = df_sorted
+                    st.session_state["discover_source"] = "pdf"
+
+    df_sorted = st.session_state.get("discover_results")
+    source = st.session_state.get("discover_source")
+
+    if df_sorted is None or df_sorted.empty or not source:
         return
 
-    citation_style_count = len(df_sorted)
-    st.markdown(
-        f"**Similar papers found (citation-style count):** {citation_style_count}"
-    )
+    if source == "prompt":
+        st.markdown(f"**Similar papers found (prompt search):** {len(df_sorted)}")
+    else:
+        st.markdown(f"**Similar papers found (PDF similarity):** {len(df_sorted)}")
+
     st.data_editor(
         df_sorted,
         use_container_width=True,
@@ -1018,126 +1082,49 @@ def prompt_to_paper_ui():
         },
     )
 
-    # citation UI under the table
     _render_citation_tools(df_sorted)
-
-def pdf_to_paper_ui():
-    uploaded_file = st.file_uploader(
-        "Upload a PDF to find similar arXiv papers:",
-        type=["pdf"],
-    )
-
-    if st.button("Find similar papers"):
-        if not uploaded_file:
-            st.error("Upload a PDF first.")
-            # nothing stored, bail
-            st.session_state.pop("pdf_results", None)
-        else:
-            with st.spinner("Reading your PDF and querying the index..."):
-                fd, tmp_path = tempfile.mkstemp(suffix=".pdf")
-                try:
-                    # write uploaded PDF to temp
-                    with os.fdopen(fd, "wb") as f:
-                        f.write(uploaded_file.read())
-
-                    # 1) extract text
-                    text = extract_text(tmp_path)
-                    if not text or len(text.split()) <= 5:
-                        st.error("Couldn't extract enough text from that PDF.")
-                        st.session_state.pop("pdf_results", None)
-                        return
-
-                    # 2) try to extract references (safe fail)
-                    try:
-                        references = extract_references_from_pdf(tmp_path)
-                    except Exception as e:
-                        print(f"[WARN] failed to extract references from PDF: {e}")
-                        references = None
-
-                finally:
-                    try:
-                        os.remove(tmp_path)
-                    except OSError:
-                        pass
-
-            # 3) embed + query Pinecone
-            emb = generate_embeddings(text)
-            # Use adjustable number of papers from filters (default 10)
-            num_papers = int(st.session_state.get("filter_num_papers", 10))
-            query_results = query_pinecone(emb, top_k=num_papers)
-            if not query_results:
-                st.error("No results from the index.")
-                st.session_state.pop("pdf_results", None)
-            else:
-                query_matches = query_results[0].get("matches", []) or []
-
-                # 4) annotate with linked_in_pdf flag if we have refs
-                if references:
-                    query_matches = annotate_results(query_matches, references)
-
-                # 5) build table WITH citations column
-                df_sorted = _build_results_table_with_citations(query_matches)
-                if df_sorted is None:
-                    st.error("No usable metadata returned for this PDF.")
-                    st.session_state.pop("pdf_results", None)
-                else:
-                    st.session_state["pdf_results"] = df_sorted
-
-    # ---- render last PDF results (no UnboundLocalError) ----
-    df_sorted = st.session_state.get("pdf_results")
-    if df_sorted is not None:
-        st.data_editor(
-            df_sorted,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Link": st.column_config.LinkColumn("PDF"),
-            },
-        )
-        _render_citation_tools(df_sorted)
-
 
 
 def update_kb_ui():
     # --- KB description / overview ---
-    st.subheader("Knowledge Base Overview")
+    st.subheader("Library Overview")
 
     current_desc = get_kb_description()
     new_desc = st.text_area(
-        "Description of your KB (optional):",
+        "Description of your Library (optional):",
         value=current_desc,
         placeholder="e.g. 'My PhD reading list on ML for physics + privacy papers'",
         height=80,
     )
-    if st.button("Save KB description"):
+    if st.button("Save Library description"):
         set_kb_description(new_desc)
-        st.success("KB description updated.")
+        st.success("Library description updated.")
 
     st.markdown("---")
 
-    # --- Add to KB: arXiv ---
+    # --- Add to Library: arXiv ---
     st.subheader("Add by arXiv ID")
     arxiv_id = st.text_input(
         "arXiv ID (e.g. 1412.6980):",
         key="kb_arxiv_id",
     )
-    if st.button("Add paper to KB"):
+    if st.button("Add paper to Library"):
         if not arxiv_id.strip():
             st.error("Enter an arXiv ID.")
         else:
             try:
-                with st.spinner("Downloading and indexing paper into KB..."):
+                with st.spinner("Downloading and indexing paper into Library..."):
                     upsert_kb(arxiv_id.strip())
-                st.success(f"Paper {arxiv_id.strip()} added to KB.")
+                st.success(f"Paper {arxiv_id.strip()} added to Library.")
             except Exception as e:
                 st.error(f"Failed to add paper: {e}")
 
     st.markdown("---")
 
-    # --- Add to KB: local PDF ---
+    # --- Add to Library: local PDF ---
     st.subheader("Add by uploading a local PDF")
     uploaded_pdf = st.file_uploader(
-        "Upload a PDF to add to KB:",
+        "Upload a PDF to add to Library:",
         type=["pdf"],
         key="kb_upload_pdf",
     )
@@ -1145,7 +1132,7 @@ def update_kb_ui():
         "Optional title for uploaded PDF (if not arXiv):",
         key="kb_upload_title",
     )
-    if st.button("Add uploaded PDF to KB"):
+    if st.button("Add uploaded PDF to Library"):
         if not uploaded_pdf:
             st.error("Upload a PDF first.")
         else:
@@ -1158,10 +1145,10 @@ def update_kb_ui():
                 fallback_title = os.path.splitext(uploaded_pdf.name)[0]
                 effective_title = (custom_title or fallback_title).strip()
 
-                with st.spinner("Indexing uploaded PDF into KB..."):
+                with st.spinner("Indexing uploaded PDF into Library..."):
                     doc_id_prefix = upsert_pdf_file(tmp_path, title=effective_title)
 
-                st.success(f"Uploaded PDF added to KB: {effective_title}")
+                st.success(f"Uploaded PDF added to Library: {effective_title}")
             except Exception as e:
                 st.error(f"Failed to index uploaded PDF: {e}")
             finally:
@@ -1172,12 +1159,12 @@ def update_kb_ui():
 
     st.markdown("---")
 
-    # --- Browse KB ---
-    st.subheader("Browse Knowledge Base")
+    # --- Browse Library ---
+    st.subheader("Browse Library")
 
     kb_docs = list_kb_documents(limit=200)
     if not kb_docs:
-        st.info("Your KB is currently empty.")
+        st.info("Your Library is currently empty.")
     else:
 
         df = pd.DataFrame(kb_docs)
@@ -1186,7 +1173,7 @@ def update_kb_ui():
             use_container_width=True,
             hide_index=True,
             column_config={
-                "doc_id": "KB ID",
+                "doc_id": "Library ID",
                 "title": "Title",
                 "source": "Source",
                 "arxiv_id": "arXiv ID",
@@ -1202,13 +1189,13 @@ def update_kb_ui():
         }
 
         selected_label = st.selectbox(
-            "Remove a specific document from the KB:",
+            "Remove a specific document from the Library:",
             options=["(none)"] + list(label_to_id.keys()),
         )
 
         if selected_label != "(none)":
             doc_id_prefix = label_to_id[selected_label]
-            if st.button("Delete selected document from KB"):
+            if st.button("Delete selected document from Library"):
                 with st.spinner(f"Deleting {selected_label} ..."):
                     deleted = delete_kb_document(doc_id_prefix)
                 st.success(f"Deleted {deleted} chunks for {selected_label}.")
@@ -1217,22 +1204,22 @@ def update_kb_ui():
 
     st.markdown("---")
 
-    # --- Danger zone: clear KB ---
+    # --- Danger zone: clear Library ---
     st.subheader("Danger zone")
 
     st.warning(
-        "Clearing the KB will remove all stored chunks from Firestore. "
-        "Chat with KB will no longer have any context. "
+        "Clearing the Library will remove all stored chunks from Firestore. "
+        "Chat with Library will no longer have any context. "
         "This does NOT currently delete datapoints from the Vertex index."
     )
 
-    if st.button("Clear entire KB"):
-        with st.spinner("Clearing KB..."):
+    if st.button("Clear entire Library"):
+        with st.spinner("Clearing Library..."):
             try:
                 deleted = clear_kb()
-                st.success(f"Cleared KB ({deleted} chunks removed).")
+                st.success(f"Cleared Library ({deleted} chunks removed).")
             except Exception as e:
-                st.error(f"Failed to clear KB: {e}")
+                st.error(f"Failed to clear Library: {e}")
 
 
 
@@ -1244,14 +1231,14 @@ def chat_with_research_ui():
     history = st.session_state["chat_history"]
 
     tooltip_text = (
-        "Knowledge base is the set of documents that are present in our model's "
+        "Library is the set of documents that are present in our model's "
         "'memory'. You can generate summary for these documents and ask specific "
-        "questions about them. To update the knowledge base please refer to 'Manage Library'."
+        "questions about them. To update the Library please refer to 'Manage Library'."
     )
     warning_html = f"""
         <div class="kb-warning">
             <span class="kb-warning-icon">⚠️</span>
-            <span class="kb-warning-text">The answers are based on the documents available in Knowledge Base</span>
+            <span class="kb-warning-text">The answers are based on the documents available in Library</span>
             <span class="kb-tooltip" data-tooltip="{html.escape(tooltip_text)}">❔</span>
         </div>
     """.strip()
@@ -1294,13 +1281,13 @@ def chat_with_research_ui():
 
     with st.form("kb_chat_form", clear_on_submit=True):
         user_input = st.text_input(
-            "Ask a question about papers in your KB:",
+            "Ask a question about papers in your Library:",
             key="kb_chat_input",
         )
         sent = st.form_submit_button("Send")
 
     if sent and user_input.strip():
-        with st.spinner("Thinking with your KB..."):
+        with st.spinner("Thinking with your Library..."):
             try:
                 answer, updated_history = kb_chat(user_input.strip(), history)
             except Exception as e:
@@ -1318,12 +1305,11 @@ def main():
     apply_needle_theme()
     app_mode = build_sidebar()
 
-    if app_mode == "prompt":
-        render_section_heading("prompt")
-        prompt_to_paper_ui()
-    elif app_mode == "pdf":
-        render_section_heading("pdf")
-        pdf_to_paper_ui()
+    if app_mode == "home":
+        home_ui()
+    elif app_mode == "discover":
+        render_section_heading("discover")
+        discover_papers_ui()
     elif app_mode == "chat":
         render_section_heading("chat")
         chat_with_research_ui()

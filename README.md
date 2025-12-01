@@ -11,10 +11,10 @@ LLM-powered research assistant built on **Google Cloud Vertex AI**, **Vertex Vec
   Upload a PDF and get similar papers from the corpus.
 
 - **Chat with Research**  
-  Chat with an assistant grounded in your own knowledge base (papers/PDFs you ingested).
+  Chat with an assistant grounded in your own Library (papers/PDFs you ingested).
 
-- **Update Knowledge Base**  
-  Ingest arXiv papers or local PDFs into a KB backed by Vertex Vector Search + Firestore.
+- **Update Library**  
+  Ingest arXiv papers or local PDFs into your Library, backed by Vertex Vector Search + Firestore.
 
 - **Citations**  
   For results that have DOIs, fetch citation counts (per year or all-time) via OpenCitations and optionally Crossref.
@@ -29,7 +29,7 @@ LLM-powered research assistant built on **Google Cloud Vertex AI**, **Vertex Vec
   - Embeddings: `text-embedding-004` (configurable)
 - **Vector search**: Vertex Vector Search
   - One index for the **papers** corpus
-  - One index for the **KB** (your custom knowledge base)
+  - One index for your **Library** (your custom collection of papers)
 - **Metadata store**: Firestore (Native mode)
 - **External APIs**:
   - `arxiv` for metadata + PDFs
@@ -47,8 +47,8 @@ Core app:
   - Prompt → Paper
   - PDF → Paper
   - Chat with Research
-  - Update Knowledge Base
-- **`chatui.py`** – minimal chat-only Streamlit UI, using the same KB chat backend.
+  - Update Library
+- **`chatui.py`** – minimal chat-only Streamlit UI, using the same Library chat backend.
 
 Search + RAG logic:
 
@@ -57,18 +57,18 @@ Search + RAG logic:
   - Gets embeddings via `vertex_client.embed_texts`
   - Wraps paper search via `query_pinecone()` → `vertex_vs_client.query_papers` (despite the name, it calls Vertex Vector Search).
 - **`chatpdf.py`**
-  - Ingests arXiv IDs or PDFs into the KB (`upsert_kb`, `upsert_pdf_file`)
-  - Does RAG-style chat over the KB (`chat`)
+  - Ingests arXiv IDs or PDFs into the Library (`upsert_kb`, `upsert_pdf_file`)
+  - Does RAG-style chat over the Library (`chat`)
   - Uses `vertex_client` (LLM + embeddings), `vertex_vs_client.query_kb`, and `metadata_store` to store chunk metadata.
 
 Infrastructure helpers:
 
 - **`vertex_client.py`** – wraps Vertex AI generative + embedding models.
-- **`vertex_vs_client.py`** – wraps Vertex Vector Search for both paper and KB indexes.
+- **`vertex_vs_client.py`** – wraps Vertex Vector Search for both paper and Library indexes.
 - **`vs_upsert.py`** – upsert datapoints into Vertex Vector Search (`upsert_papers`, `upsert_kb`).
 - **`metadata_store.py`** – Firestore operations for:
   - `papers` collection (corpus metadata)
-  - `kb_chunks` collection (KB chunk metadata).
+  - `kb_chunks` collection (Library chunk metadata).
 - **`citations.py`** – calls OpenCitations and Crossref to compute citation counts.
 
 Offline indexing / utilities:
@@ -106,7 +106,7 @@ You need:
 You must also create two Vertex Vector Search indexes:
 
 - A **papers** index and endpoint
-- A **KB** index and endpoint
+- A **Library** index and endpoint
 
 Both indexes must use the same embedding dimension as your configured embedding model (default: `text-embedding-004` → 768 dims).
 
@@ -119,4 +119,3 @@ Both indexes must use the same embedding dimension as your configured embedding 
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
-

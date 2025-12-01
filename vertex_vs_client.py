@@ -81,7 +81,7 @@ def query_papers(query_vector: List[float], top_k: int = 5) -> List[Dict[str, An
 
 def query_kb(query_vector: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
     """
-    Same pattern for KB index (Chat with Research).
+    Same pattern for the Library index (Chat with Research).
     """
     if _kb_endpoint is None:
         return []

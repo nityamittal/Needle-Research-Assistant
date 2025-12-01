@@ -68,7 +68,7 @@ def _extract_full_text(pdf_path: str) -> str:
 
 
 def upsert_kb(arxiv_id: str) -> None:
-    """Fetch arXiv paper, chunk it, embed with Vertex, and upsert into Vertex KB + Firestore."""
+    """Fetch arXiv paper, chunk it, embed with Vertex, and upsert into the Library (Vertex index + Firestore)."""
     pdf_path, meta = _download_arxiv_pdf(arxiv_id)
     try:
         full_text = _extract_full_text(pdf_path)
@@ -117,7 +117,7 @@ def upsert_kb(arxiv_id: str) -> None:
 
 
 def upsert_pdf_file(pdf_path: str, title: str | None = None) -> str:
-    """Chunk a local PDF file and upsert it into the KB + Firestore. Returns the document id used."""
+    """Chunk a local PDF file and upsert it into the Library (Vertex index + Firestore). Returns the document id used."""
     if not os.path.exists(pdf_path):
         raise FileNotFoundError(f"PDF not found: {pdf_path}")
 
@@ -164,7 +164,7 @@ from metadata_store import upsert_kb_chunks_metadata, clear_kb_chunks
 
 def clear_kb() -> int:
     """
-    Clear the KB metadata from Firestore.
+    Clear the Library metadata from Firestore.
 
     NOTE: This does NOT remove datapoints from the Vertex index.
     After this, query_kb will still return neighbors, but metadata/text
@@ -177,7 +177,7 @@ def clear_kb() -> int:
 
 
 def _retrieve(query: str, top_k: int = TOP_K) -> List[Dict[str, Any]]:
-    """Retrieve top_k chunks from KB (Vertex + Firestore)."""
+    """Retrieve top_k chunks from the Library (Vertex index + Firestore)."""
     q_vec = embed_texts(query)[0]
     if hasattr(q_vec, "tolist"):
         emb = q_vec.tolist()
@@ -191,7 +191,7 @@ def _retrieve(query: str, top_k: int = TOP_K) -> List[Dict[str, Any]]:
 
 def chat(new_message: str, history: List[Dict[str, Any]]):
     """
-    RAG chat over your KB using Vertex AI + Vertex Vector Search + Firestore.
+    RAG chat over your Library using Vertex AI + Vertex Vector Search + Firestore.
 
     history is a list of {"role": "user" | "assistant", "content": str, ...}
     Returns: (assistant_response: str, updated_history: list)

@@ -55,7 +55,7 @@ def get_papers_metadata(ids: List[str]) -> Dict[str, Dict[str, Any]]:
     return result
 
 
-# ------------ KB CHUNKS (chat context) ---------------
+# ------------ Library CHUNKS (chat context) ---------------
 
 
 def upsert_kb_chunks_metadata(chunks: List[Dict[str, Any]]) -> None:
@@ -81,7 +81,7 @@ def upsert_kb_chunks_metadata(chunks: List[Dict[str, Any]]) -> None:
 
 
 def get_kb_chunks_metadata(ids: List[str]) -> Dict[str, Dict[str, Any]]:
-    """Batch fetch KB chunk metadata for a list of chunk ids."""
+    """Batch fetch Library chunk metadata for a list of chunk ids."""
     if not ids:
         return {}
 
@@ -96,7 +96,7 @@ def get_kb_chunks_metadata(ids: List[str]) -> Dict[str, Dict[str, Any]]:
     return result
 
 def get_kb_description() -> str:
-    """Get the global KB description (if any)."""
+    """Get the global Library description (if any)."""
     doc = _db.collection("kb_meta").document("default").get()
     if not doc.exists:
         return ""
@@ -105,7 +105,7 @@ def get_kb_description() -> str:
 
 
 def set_kb_description(text: str) -> None:
-    """Set/update the global KB description."""
+    """Set/update the global Library description."""
     _db.collection("kb_meta").document("default").set(
         {"description": text},
         merge=True,

@@ -4,3 +4,9 @@
 .venv312/
 __pycache__/
 *.pyc
+.env
+PDFs/
+*.json
+research-assistant/
+.venv/
+.gitignore
