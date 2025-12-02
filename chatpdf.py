@@ -17,6 +17,8 @@ from metadata_store import upsert_kb_chunks_metadata
 EMBED_DIM = int(os.getenv("VERTEX_EMBED_DIM", "768"))
 
 TOP_K = int(os.getenv("KB_TOP_K", "5"))
+# Include N recent user turns when building the retrieval query.
+RECENT_USER_TURNS = int(os.getenv("KB_RECENT_USER_TURNS", "3"))
 
 
 # --- Helpers ---
@@ -36,6 +38,69 @@ def _chunk_text(text: str, max_tokens: int = 256, overlap: int = 64) -> List[str
 
 def _embed_chunks(chunks: List[str]) -> List[List[float]]:
     return embed_texts(chunks)
+
+
+def _build_retrieve_query(new_message: str, history: List[Dict[str, Any]], titles_hint: str) -> str:
+    """
+    Build a retrieval query that includes the latest user message, up to
+    RECENT_USER_TURNS previous user turns, and any cited titles from the last
+    assistant response. This keeps follow-up questions grounded in the paper
+    currently under discussion.
+    """
+    user_context: List[str] = []
+    for msg in reversed(history):
+        if msg.get("role") != "user":
+            continue
+        user_context.append(msg.get("content", ""))
+        if len(user_context) >= RECENT_USER_TURNS:
+            break
+
+    user_context = list(reversed([u for u in user_context if u]))
+
+    parts: List[str] = [new_message]
+    if user_context:
+        context_text = "\n".join(user_context)
+        parts.append(f"Recent related questions:\n{context_text}")
+    if titles_hint:
+        parts.append(f"Papers previously referenced: {titles_hint}")
+
+    return "\n\n".join(p.strip() for p in parts if p and p.strip())
+
+
+def _retrieve_with_backfill(
+    new_message: str, history: List[Dict[str, Any]], titles_hint: str, top_k: int = TOP_K
+) -> List[Dict[str, Any]]:
+    """
+    Run retrieval with a contextual query first, then backfill remaining slots
+    with a plain user-message query so we still search the broader library when
+    the user pivots without naming the paper explicitly.
+    """
+    queries: List[str] = []
+    contextual_query = _build_retrieve_query(new_message, history, titles_hint)
+    if contextual_query:
+        queries.append(contextual_query)
+
+    direct_query = (new_message or "").strip()
+    if direct_query and direct_query not in queries:
+        queries.append(direct_query)
+
+    results: List[Dict[str, Any]] = []
+    seen_ids = set()
+
+    for query in queries:
+        if not query:
+            continue
+        hits = _retrieve(query, top_k=top_k)
+        for hit in hits:
+            cid = hit.get("id")
+            if not cid or cid in seen_ids:
+                continue
+            results.append(hit)
+            seen_ids.add(cid)
+            if len(results) >= top_k:
+                return results
+
+    return results
 
 
 def _download_arxiv_pdf(arxiv_id: str) -> Tuple[str, Any]:
@@ -196,8 +261,26 @@ def chat(new_message: str, history: List[Dict[str, Any]]):
     history is a list of {"role": "user" | "assistant", "content": str, ...}
     Returns: (assistant_response: str, updated_history: list)
     """
-    # 1. Retrieve context
-    matches = _retrieve(new_message, top_k=TOP_K)
+
+        # Find last assistant message and grab up to 3 cited titles
+    titles_hint = ""
+    last_assistant = None
+    for msg in reversed(history):
+        if msg.get("role") == "assistant":
+            last_assistant = msg
+            break
+
+    if last_assistant:
+        last_citations = last_assistant.get("citations") or []
+        hint_titles = [
+            c.get("title", "")
+            for c in last_citations
+            if c.get("title")
+        ][:3]
+        if hint_titles:
+            titles_hint = " ".join(hint_titles)
+
+    matches = _retrieve_with_backfill(new_message, history, titles_hint, top_k=TOP_K)
 
     context_blocks = []
     citation_meta = []
@@ -228,11 +311,18 @@ def chat(new_message: str, history: List[Dict[str, Any]]):
     convo_text = "\n".join(convo_snippets)
 
     system_prompt = (
-        "You are a research assistant. Answer the question using ONLY the provided context. "
-        "If the context is not sufficient, say you don't know. "
-        "Cite sources inline as [1], [2], etc. matching the numbered context chunks."
-        "If the question is about summarizing a paper related to the provided context, you should ALWAYS follow up with what kind of summary the user wants (e.g., key contributions, abstract, etc.) before attempting to answer."
-        "Always end your interaction with a follow-up question to the user asking for more details about what they want to know about the provided context."
+        "You are a research assistant. You have access to two kinds of knowledge: "
+        "(1) the provided context, which comes from the user's Library of papers; "
+        "(2) your own general world knowledge.\n\n"
+        "When the user's question is about specific papers, technical details, or claims that might be in the Library, "
+        "you MUST answer using ONLY the provided context. If the context is not sufficient, say you don't know and, if helpful, "
+        "suggest what additional papers or information might be needed.\n\n"
+        "For simple, generic questions that clearly do not depend on the Library (for example, basic definitions like "
+        "'What is a DOI?' or 'What is gradient descent?'), you may answer from your own general knowledge. "
+        "Whenever you use the provided context, cite sources inline as [1], [2], etc. matching the numbered context chunks. "
+        "If the question is about summarizing a paper related to the context, and you have identified which paper the user is asking about, you should ALWAYS follow up with what kind of summary the user wants "
+        "(e.g., key contributions, abstract, etc.) and focus on that in your answer.\n\n"
+        "Always end your interaction with a follow-up question asking what the user would like to know next."
     )
 
     full_prompt = (
